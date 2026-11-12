@@ -4,8 +4,8 @@
         {
             "id": "dev.orpheon.eclipsebridge",
             "name": "Orpheon Eclipse Bridge",
-            "version": "1.0.5",
-            "versionCode": 6,
+            "version": "1.0.6",
+            "versionCode": 7,
             "author": "Orpheon",
             "description": "One ordered list of Eclipse music addons for MySpoti. Plays and downloads through your own addons with exact Spotify URI and ISRC resolution, per-addon settings, health tests and instant fallback.",
             "actions": [
@@ -41,9 +41,9 @@
                     "why": "Report addon test results and configuration problems"
                 }
             ],
-            "url": "dev.orpheon.eclipsebridge-1.0.5.zip",
-            "sha256": "b3d9903d080a9cca3026e0bba7a5a052e7aea61a2247e25ce583fc52ec195b79",
-            "size": 27228,
+            "url": "dev.orpheon.eclipsebridge-1.0.6.zip",
+            "sha256": "3f30c1191cf67e70b7472b27bb21dd377790431c47a8487ececf2eba89e10647",
+            "size": 27946,
             "updated_at": "2026-11-12",
             "category": "tools",
             "tags": [
@@ -53,7 +53,7 @@
                 "addons"
             ],
             "min_app_version": "2.4.0",
-            "changelog": "1.0.5: Two-level local cache (resolved addon IDs plus stream URLs) with adjustable sizes and TTLs, live now-playing/last-request/activity on the page, and a flatter simpler page. 1.0.4: New simple page with live playback and a prefetch setting. 1.0.3: Prefetch the next two queue tracks. 1.0.2: Removed the automatic status probe. 1.0.1: Hardened stream expiry. 1.0.0: First release."
+            "changelog": "1.0.6: Do not start a second addon stream on timeouts or 5xx. The query stream form is used only for 404/400/405, and a 503 preparing is retried on the same URL. 1.0.5: Two-level local cache with adjustable sizes/TTLs and a live simpler page. 1.0.4: Live playback page. 1.0.3: Prefetch. 1.0.2: Removed the status probe. 1.0.1: Stream expiry fixes. 1.0.0: First release."
         }
     ]
 }

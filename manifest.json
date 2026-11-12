@@ -1,8 +1,8 @@
 {
   "id": "dev.orpheon.eclipsebridge",
   "name": "Orpheon Eclipse Bridge",
-  "version": "1.0.5",
-  "versionCode": 6,
+  "version": "1.0.6",
+  "versionCode": 7,
   "apiVersion": 1,
   "minAppVersion": "2.4.0",
   "author": "Orpheon",
@@ -58,5 +58,5 @@
       "Put Orpheon above Spotify in Playback and Downloads."
     ]
   },
-  "changelog": "1.0.5: Two-level local cache (resolved addon IDs plus stream URLs) with adjustable sizes and TTLs, live now-playing/last-request/activity on the page, and a flatter simpler page. 1.0.4: New simple page with live playback and a prefetch setting. 1.0.3: Prefetch the next two queue tracks. 1.0.2: Removed the automatic status probe. 1.0.1: Hardened stream expiry. 1.0.0: First release."
+  "changelog": "1.0.6: Do not start a second addon stream on timeouts or 5xx. The query stream form is used only for 404/400/405, and a 503 preparing is retried on the same URL. 1.0.5: Two-level local cache with adjustable sizes/TTLs and a live simpler page. 1.0.4: Live playback page. 1.0.3: Prefetch. 1.0.2: Removed the status probe. 1.0.1: Stream expiry fixes. 1.0.0: First release."
 }

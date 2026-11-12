@@ -1,4 +1,4 @@
-/* Orpheon Eclipse Bridge 1.0.5 for MySpoti. No external dependencies.
+/* Orpheon Eclipse Bridge 1.0.6 for MySpoti. No external dependencies.
  *
  * A pure Eclipse addon bridge: one ordered addon list, no Eclipse Cloud
  * account, login, token or subscription code. Each addon advertises its own
@@ -14,8 +14,8 @@
 (function () {
   'use strict';
 
-  var P = '[Orpheon 1.0.5] ';
-  var VERSION = '1.0.5';
+  var P = '[Orpheon 1.0.6] ';
+  var VERSION = '1.0.6';
   var ADDONS_KEY = 'addons_v1';
   var CACHE_KEY = 'cache_v1';
   var LAST_KEY = 'last_play_v1';
@@ -408,7 +408,15 @@
       var r = myspoti.http.get(url, {headers: addonHeaders(), timeout: timeout(max)});
       if (!r || r.error) { log(stage + ': network'); return {error: 'network', status: 0}; }
       var status = Number(r.status) || 0;
-      if (!isOk(r)) { log(stage + ': HTTP ' + status); return {error: 'http-' + status, status: status}; }
+      if (!isOk(r)) {
+        log(stage + ': HTTP ' + status);
+        var retry = Number(r.headers && r.headers['retry-after']);
+        var failed = {error: 'http-' + status, status: status};
+        if (isFinite(retry) && retry > 0) failed.retryAfterMs = Math.round(retry * 1000);
+        var body = jsonOf(r);
+        if (body && typeof body === 'object') failed.body = body;
+        return failed;
+      }
       var data = jsonOf(r);
       if (!data || typeof data !== 'object') { log(stage + ': invalid JSON'); return {error: 'invalid-json', status: status}; }
       return {ok: true, status: status, data: data};
@@ -659,24 +667,43 @@
     return out;
   }
 
-  function streamAddon(addon, id, matchedBy) {
-    var urls = [
-      addonEndpoint(addon, '/stream/' + encodeURIComponent(s(id)), {}),
-      addonEndpoint(addon, '/stream', {trackId: s(id)})
-    ];
-    var last = null;
-    for (var i = 0; i < urls.length; i++) {
-      var r = getJson(urls[i], 5000, 'stream');
-      if (!r.ok) {
-        last = r;
-        if (r.error === 'http-429' || r.error === 'http-401' || r.error === 'http-403') break;
-        continue;
-      }
-      var audio = toAudio(r.data, addon);
-      if (audio) return {audio: audio, matchedBy: matchedBy, route: matchedBy === 'metadata' ? 'search' : 'resolve', id: s(id)};
-      last = {error: 'unsupported', status: r.status};
+  function streamFetch(addon, url, id, matchedBy) {
+    var r = getJson(url, 7000, 'stream');
+    if (!r.ok) return {error: r.error, status: r.status, retryAfterMs: r.retryAfterMs || 0, body: r.body || null};
+    var audio = toAudio(r.data, addon);
+    if (!audio) return {error: 'unsupported', status: r.status};
+    return {audio: audio, matchedBy: matchedBy, route: matchedBy === 'metadata' ? 'search' : 'resolve', id: s(id)};
+  }
+
+  function streamAddon(addon, id, matchedBy, allowRetry) {
+    var pathUrl = addonEndpoint(addon, '/stream/' + encodeURIComponent(s(id)), {});
+    var result = streamFetch(addon, pathUrl, id, matchedBy);
+    var retries = 0;
+    while (allowRetry && result.error === 'http-503' && retries < 2) {
+      if (!feature('util.sleep') || !myspoti.util || typeof myspoti.util.sleep !== 'function') break;
+      var wait = Math.min(2000, Number(result.retryAfterMs) || 2000);
+      if (wait < 200) wait = 200;
+      myspoti.util.sleep(wait);
+      result = streamFetch(addon, pathUrl, id, matchedBy);
+      retries++;
     }
-    return {error: last ? last.error : 'no-audio', status: last ? last.status : 0};
+    if (result.audio) return result;
+    // The query form is a different route, not a retry. Only use it when the
+    // addon says the path form does not exist; never after a timeout or 5xx,
+    // which would start a second resolve and download for the same song.
+    var knownMiss = result.body && (result.body.error === 'not_cached' || result.body.error === 'not_found' || result.body.trackId);
+    if (!knownMiss && (result.error === 'http-404' || result.error === 'http-400' || result.error === 'http-405')) {
+      var queryUrl = addonEndpoint(addon, '/stream', {trackId: s(id)});
+      if (queryUrl !== pathUrl) {
+        var alternate = streamFetch(addon, queryUrl, id, matchedBy);
+        if (alternate.audio) return alternate;
+        result = alternate;
+      }
+    }
+    if (result.error === 'http-503') {
+      return {error: 'server-down', status: 503, retryAfterMs: Number(result.retryAfterMs) || 5000, id: s(id)};
+    }
+    return result;
   }
 
   function searchAddon(t, addon) {
@@ -700,7 +727,7 @@
     return {error: last ? last.error : 'no-match', status: last ? last.status : 0};
   }
 
-  function tryAddon(t, addon, exactOnly) {
+  function tryAddon(t, addon, exactOnly, allowRetry) {
     var exact = !!(spotifyUriFor(t) || s(t.isrc));
     var found = null;
     var last = null;
@@ -732,12 +759,13 @@
 
     if (!found) {
       if (last && last.error === 'http-429') return {error: 'rate-limited', retryAfterMs: 60000, status: 429};
+      if (last && last.error === 'http-503') return {error: 'server-down', retryAfterMs: last.retryAfterMs || 5000, status: 503};
       if (last && (last.error === 'http-401' || last.error === 'http-403')) return {error: 'forbidden', status: last.status};
       if (last && last.error === 'network') return {error: 'network'};
       return {error: 'not-found', status: last ? last.status : 0};
     }
 
-    return streamAddon(addon, found.id, found.matchedBy);
+    return streamAddon(addon, found.id, found.matchedBy, allowRetry);
   }
 
   // ---- Cache ------------------------------------------------------------
@@ -1062,7 +1090,7 @@
     if (resolved) {
       var resolvedAddon = findAddonByUrl(resolved.addonUrl);
       if (resolvedAddon && addonStampFor(resolvedAddon) === resolved.stamp) {
-        var sr = streamAddon(resolvedAddon, resolved.id, resolved.matchedBy);
+        var sr = streamAddon(resolvedAddon, resolved.id, resolved.matchedBy, !prefetch);
         if (sr.audio) {
           var cachedResult = {
             audio: sr.audio,
@@ -1080,6 +1108,7 @@
           log('served by ' + cachedResult.addon + ' from resolved id cache took=' + cachedResult.ms + 'ms');
           return cachedResult;
         }
+        if (sr.error === 'server-down') return {error: 'server-down', retryAfterMs: sr.retryAfterMs || 5000};
         removeResolved(key);
       } else {
         removeResolved(key);
@@ -1087,10 +1116,10 @@
     }
     if (readMiss(key, stamp)) return {error: 'not-found', cache: 'hit'};
 
-    var failures = [], anyNetwork = false, anyRate = false, anyForbidden = false;
+    var failures = [], anyNetwork = false, anyRate = false, anyForbidden = false, anyServerDown = false, serverRetry = 0;
     for (var i = 0; i < list.length; i++) {
       if (budgetLeft <= 0) { anyNetwork = true; break; }
-      var r = tryAddon(t, list[i], ahead || prefetch);
+      var r = tryAddon(t, list[i], ahead || prefetch, !prefetch);
       if (r.audio) {
         var result = {
           audio: r.audio,
@@ -1113,12 +1142,14 @@
       if (r.error === 'network') anyNetwork = true;
       if (r.error === 'rate-limited') anyRate = true;
       if (r.error === 'forbidden') anyForbidden = true;
+      if (r.error === 'server-down') { anyServerDown = true; serverRetry = Math.max(serverRetry, Number(r.retryAfterMs) || 0); }
     }
     if (!prefetch && !ahead) {
       log('no audio: ' + failures.join(', '));
       addActivity('miss', s(t.title) + ' · ' + (anyRate ? 'rate-limited' : anyNetwork ? 'network' : anyForbidden ? 'forbidden' : 'not-found'));
     }
     if (anyRate) return {error: 'rate-limited', retryAfterMs: 60000};
+    if (anyServerDown) return {error: 'server-down', retryAfterMs: serverRetry || 30000};
     if (anyNetwork) return {error: 'network'};
     if (anyForbidden) return {error: 'forbidden'};
     if (!ahead && !prefetch) rememberMiss(key, stamp);
@@ -1241,6 +1272,11 @@
       return limited;
     }
     if (r.error === 'forbidden') return reason('error', 'An addon rejected the request (HTTP 401/403). Open Orpheon and test it.');
+    if (r.error === 'server-down') {
+      var down = reason('server-down', 'The addon is still preparing this track. Try again shortly.');
+      if (down) down.retryAfterMs = Number(r.retryAfterMs) || 30000;
+      return down;
+    }
     if (r.error === 'network') return reason('network', 'No addon answered in time.');
     return reason('not-found', 'No enabled addon had this track.');
   }

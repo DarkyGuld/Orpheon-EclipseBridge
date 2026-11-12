@@ -61,8 +61,8 @@ https://github.com/DarkyGuld/Orpheon-EclipseBridge
 
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.5.zip` from `packages/` or the
-[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.5) and install it
+Download `dev.orpheon.eclipsebridge-1.0.6.zip` from `packages/` or the
+[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.6) and install it
 from the extension store's local zip option.
 
 ## Add an addon
@@ -152,6 +152,10 @@ Or run `scripts/build.sh` from the repository root.
 - Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
 
 ## Changelog
+
+### 1.0.6
+
+- A timeout or 5xx no longer starts a second addon stream. The `/stream?trackId=` form is only tried on 404/400/405, and a 503 preparing is retried on the same URL.
 
 ### 1.0.5
 
