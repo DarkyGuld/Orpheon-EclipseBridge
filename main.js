@@ -1,4 +1,4 @@
-/* Orpheon Eclipse Bridge 1.0.4 for MySpoti. No external dependencies.
+/* Orpheon Eclipse Bridge 1.0.5 for MySpoti. No external dependencies.
  *
  * A pure Eclipse addon bridge: one ordered addon list, no Eclipse Cloud
  * account, login, token or subscription code. Each addon advertises its own
@@ -14,18 +14,24 @@
 (function () {
   'use strict';
 
-  var P = '[Orpheon 1.0.4] ';
-  var VERSION = '1.0.4';
+  var P = '[Orpheon 1.0.5] ';
+  var VERSION = '1.0.5';
   var ADDONS_KEY = 'addons_v1';
   var CACHE_KEY = 'cache_v1';
   var LAST_KEY = 'last_play_v1';
+  var RESOLVED_KEY = 'resolved_v1';
+  var CACHE_CFG_KEY = 'cache_cfg_v1';
   var PREFETCH_KEY = 'prefetch_v1';
   var PREFETCH_CFG_KEY = 'prefetch_cfg_v1';
+  var NOW_KEY = 'now_playing_v1';
+  var REQUEST_KEY = 'last_request_v1';
+  var ACTIVITY_KEY = 'activity_v1';
   var MAX_ADDONS = 12;
-  var MAX_CACHE = 120;
   var MISS_TTL = 90 * 1000;
   var DEFAULT_TTL = 5 * 60 * 1000;
-  var MAX_TTL = 10 * 60 * 1000;
+  var MAX_TTL = 120 * 60 * 1000;
+  var CACHE_OPTIONS = {resolved: [100, 500, 1000, 2000], streams: [50, 200, 500], days: [1, 7, 30, 90], minutes: [10, 30, 60, 120]};
+  var DEFAULT_CACHE_CFG = {resolved: 500, streams: 200, days: 7, minutes: 30};
   var UA = 'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36';
 
   var deadline = 0;
@@ -321,6 +327,23 @@
     if (!isFinite(count) || count < 1) count = 2;
     if (count > 3) count = 3;
     return {enabled: enabled, count: count};
+  }
+
+  function pickNumber(value, allowed, fallback) {
+    var n = Number(value);
+    for (var i = 0; i < allowed.length; i++) if (allowed[i] === n) return n;
+    return fallback;
+  }
+
+  function cacheConfig() {
+    var v = safeGet(CACHE_CFG_KEY);
+    if (!v || typeof v !== 'object') v = {};
+    return {
+      resolved: pickNumber(v.resolved, CACHE_OPTIONS.resolved, DEFAULT_CACHE_CFG.resolved),
+      streams: pickNumber(v.streams, CACHE_OPTIONS.streams, DEFAULT_CACHE_CFG.streams),
+      days: pickNumber(v.days, CACHE_OPTIONS.days, DEFAULT_CACHE_CFG.days),
+      minutes: pickNumber(v.minutes, CACHE_OPTIONS.minutes, DEFAULT_CACHE_CFG.minutes)
+    };
   }
 
   function loadAddons() {
@@ -650,7 +673,7 @@
         continue;
       }
       var audio = toAudio(r.data, addon);
-      if (audio) return {audio: audio, matchedBy: matchedBy, route: matchedBy === 'metadata' ? 'search' : 'resolve'};
+      if (audio) return {audio: audio, matchedBy: matchedBy, route: matchedBy === 'metadata' ? 'search' : 'resolve', id: s(id)};
       last = {error: 'unsupported', status: r.status};
     }
     return {error: last ? last.error : 'no-audio', status: last ? last.status : 0};
@@ -750,8 +773,9 @@
     for (var i = 0; i < keys.length - max; i++) delete obj[keys[i]];
   }
   function saveCache(cache) {
-    try { pruneCache(cache, MAX_CACHE); } catch (e) { cache = {tracks: {}, misses: {}}; }
-    var sizes = [MAX_CACHE, 20, 5];
+    var cfg = cacheConfig();
+    try { pruneCache(cache, cfg.streams); } catch (e) { cache = {tracks: {}, misses: {}}; }
+    var sizes = [cfg.streams, 50, 10];
     for (var i = 0; i < sizes.length; i++) {
       if (i) pruneCache(cache, sizes[i]);
       try { myspoti.storage.set(CACHE_KEY, cache); return true; } catch (e) {}
@@ -760,7 +784,7 @@
     log('cache: storage full; dropped');
     return false;
   }
-  function clearCache() { safeRemove(CACHE_KEY); pushLive(); }
+  function clearCache() { safeRemove(CACHE_KEY); safeRemove(RESOLVED_KEY); pushLive(); }
 
   function readCached(key, stamp) {
     var cache = loadCache();
@@ -775,10 +799,12 @@
   }
   function writeCached(key, stamp, result) {
     var audio = result.audio || {};
+    var cfg = cacheConfig();
+    var cap = cfg.minutes * 60 * 1000;
     var raw = Number(audio.expiresInMs);
     if (isFinite(raw) && raw === 0) return;
     if (isFinite(raw) && raw > 0 && raw <= 8000) return;
-    var ttl = isFinite(raw) && raw > 0 ? Math.min(MAX_TTL, raw - 3000) : DEFAULT_TTL;
+    var ttl = isFinite(raw) && raw > 0 ? Math.min(MAX_TTL, cap, raw - 3000) : Math.min(cap, DEFAULT_TTL);
     if (ttl < 5000) return;
     var cache = loadCache();
     cache.tracks[key] = {
@@ -810,25 +836,127 @@
     cache.misses[key] = {t: Date.now(), stamp: stamp};
     saveCache(cache);
   }
+  function loadResolved() {
+    try {
+      var v = myspoti.storage.get(RESOLVED_KEY);
+      if (v && typeof v === 'object' && v.tracks && typeof v.tracks === 'object') return v;
+    } catch (e) {}
+    return {tracks: {}};
+  }
+
+  function pruneResolved(cache, max, days) {
+    var now = Date.now(), ttl = days * 86400000, k;
+    for (k in cache.tracks) {
+      if (!Object.prototype.hasOwnProperty.call(cache.tracks, k)) continue;
+      var e = cache.tracks[k];
+      if (!e || Number(e.exp || 0) <= now || now - Number(e.t || 0) > ttl) delete cache.tracks[k];
+    }
+    trimCache(cache.tracks, max);
+  }
+
+  function saveResolved(cache, max) {
+    var cfg = cacheConfig();
+    try { pruneResolved(cache, max, cfg.days); } catch (e) { cache = {tracks: {}}; }
+    var sizes = [max, 100, 20];
+    for (var i = 0; i < sizes.length; i++) {
+      if (i) pruneResolved(cache, sizes[i], cfg.days);
+      try { myspoti.storage.set(RESOLVED_KEY, cache); return true; } catch (e) {}
+    }
+    safeRemove(RESOLVED_KEY);
+    log('resolved cache: storage full; dropped');
+    return false;
+  }
+
+  function addonStampFor(addon) {
+    return s(addon.url) + '|' + JSON.stringify(addon.values || {});
+  }
+
+  function findAddonByUrl(url) {
+    var list = enabledAddons();
+    for (var i = 0; i < list.length; i++) if (s(list[i].url) === s(url)) return list[i];
+    return null;
+  }
+
+  function readResolved(key) {
+    var cache = loadResolved();
+    var e = cache.tracks[key];
+    if (!e) return null;
+    if (Number(e.exp || 0) <= Date.now()) {
+      delete cache.tracks[key];
+      saveResolved(cache, cacheConfig().resolved);
+      return null;
+    }
+    return e;
+  }
+
+  function writeResolved(key, addon, found) {
+    if (!key || !addon || !found || !s(found.id)) return;
+    var cfg = cacheConfig();
+    var cache = loadResolved();
+    cache.tracks[key] = {
+      t: Date.now(),
+      exp: Date.now() + cfg.days * 86400000,
+      id: s(found.id),
+      addonUrl: addon.url,
+      addonName: addon.name,
+      matchedBy: found.matchedBy || 'metadata',
+      route: found.route || 'resolve',
+      stamp: addonStampFor(addon)
+    };
+    saveResolved(cache, cfg.resolved);
+  }
+
+  function removeResolved(key) {
+    var cache = loadResolved();
+    if (!cache.tracks[key]) return;
+    delete cache.tracks[key];
+    saveResolved(cache, cacheConfig().resolved);
+  }
+
   function cacheInfo() {
-    var cache = loadCache(), now = Date.now(), count = 0, newest = 0;
+    var now = Date.now(), streams = 0, ids = 0, newest = 0;
+    var cache = loadCache();
     for (var k in cache.tracks) {
       if (!Object.prototype.hasOwnProperty.call(cache.tracks, k)) continue;
       var e = cache.tracks[k];
       if (e && Number(e.exp || 0) > now) {
-        count++;
+        streams++;
         newest = Math.max(newest, Number(e.t || 0));
       }
     }
-    return {tracks: count, lastAt: newest || null};
+    var resolved = loadResolved();
+    for (var r in resolved.tracks) {
+      if (!Object.prototype.hasOwnProperty.call(resolved.tracks, r)) continue;
+      var re = resolved.tracks[r];
+      if (re && Number(re.exp || 0) > now) {
+        ids++;
+        newest = Math.max(newest, Number(re.t || 0));
+      }
+    }
+    return {streams: streams, resolved: ids, tracks: streams, lastAt: newest || null, config: cacheConfig()};
+  }
+
+  function storageBytes() {
+    var keys = [ADDONS_KEY, CACHE_KEY, LAST_KEY, RESOLVED_KEY, CACHE_CFG_KEY, PREFETCH_KEY, PREFETCH_CFG_KEY, NOW_KEY, REQUEST_KEY, ACTIVITY_KEY];
+    var total = 0;
+    for (var i = 0; i < keys.length; i++) {
+      var v = safeGet(keys[i]);
+      if (v === undefined) continue;
+      try { total += keys[i].length + JSON.stringify(v).length; } catch (e) {}
+    }
+    return total;
   }
 
   function liveState() {
     return {
       lastPlay: safeGet(LAST_KEY) || null,
+      nowPlaying: safeGet(NOW_KEY) || null,
+      lastRequest: safeGet(REQUEST_KEY) || null,
+      activity: safeGet(ACTIVITY_KEY) || [],
       prefetch: safeGet(PREFETCH_KEY) || null,
       prefetchConfig: prefetchConfig(),
-      cache: cacheInfo()
+      cache: cacheInfo(),
+      storageBytes: storageBytes()
     };
   }
 
@@ -857,6 +985,57 @@
     pushLive();
   }
 
+  function addActivity(kind, text) {
+    var list = safeGet(ACTIVITY_KEY);
+    if (!Array.isArray(list)) list = [];
+    list.push({at: Date.now(), kind: s(kind), text: s(text)});
+    if (list.length > 12) list = list.slice(-12);
+    try { myspoti.storage.set(ACTIVITY_KEY, list); } catch (e) {}
+    pushLive();
+  }
+
+  function rememberRequest(t, ahead) {
+    try {
+      myspoti.storage.set(REQUEST_KEY, {at: Date.now(), title: s(t.title), artist: s(t.artist), ahead: !!ahead});
+    } catch (e) {}
+  }
+
+  function rememberNowPlaying(e) {
+    var track = e && e.track;
+    if (!track || !s(track.title)) return;
+    var origin = s(e.origin);
+    var provider = s(e.providerId);
+    var self = s(myspoti.extension && myspoti.extension.id);
+    var source = origin;
+    if (origin === 'audio-source') source = (provider && self && provider === self) ? 'Orpheon' : 'Addon';
+    else if (origin === 'spotify') source = 'Spotify';
+    else if (origin === 'download') source = 'Download';
+    else if (origin === 'local-file') source = 'Local file';
+    try {
+      myspoti.storage.set(NOW_KEY, {
+        at: Date.now(),
+        title: s(track.title),
+        artist: s(track.artist),
+        uri: s(track.uri),
+        origin: origin,
+        providerId: provider,
+        source: source,
+        playing: e.type === 'start'
+      });
+    } catch (err) {}
+    pushLive();
+    return source;
+  }
+
+  function setNowPlayingPlaying(playing) {
+    var n = safeGet(NOW_KEY);
+    if (!n || !n.title) return;
+    n.playing = !!playing;
+    n.at = Date.now();
+    try { myspoti.storage.set(NOW_KEY, n); } catch (e) {}
+    pushLive();
+  }
+
   // ---- Resolve ----------------------------------------------------------
   function load(t, options) {
     options = options || {};
@@ -866,14 +1045,45 @@
     var budget = Number(options.budget) > 0 ? Number(options.budget) : (ahead ? 12000 : 14000);
     deadline = started + budget;
     budgetLeft = budget;
+    if (!prefetch) rememberRequest(t, ahead);
     var list = enabledAddons();
     if (!list.length) return {error: 'config'};
     var key = trackKey(t);
     var stamp = addonStamp(list);
     var cached = readCached(key, stamp);
     if (cached) {
-      if (!prefetch) rememberLast({title: s(t.title), artist: s(t.artist), addon: cached.addon, route: cached.route, cache: 'hit', ms: 0});
+      if (!prefetch) {
+        rememberLast({title: s(t.title), artist: s(t.artist), addon: cached.addon, route: cached.route, cache: 'hit', ms: 0});
+        addActivity('cache', s(t.title) + ' · ' + (cached.addon || 'addon'));
+      }
       return {audio: cached.audio, cache: 'hit', addon: cached.addon, matchedBy: cached.matchedBy, route: cached.route, ms: 0};
+    }
+    var resolved = readResolved(key);
+    if (resolved) {
+      var resolvedAddon = findAddonByUrl(resolved.addonUrl);
+      if (resolvedAddon && addonStampFor(resolvedAddon) === resolved.stamp) {
+        var sr = streamAddon(resolvedAddon, resolved.id, resolved.matchedBy);
+        if (sr.audio) {
+          var cachedResult = {
+            audio: sr.audio,
+            addon: resolvedAddon.name || 'Eclipse addon',
+            matchedBy: sr.matchedBy || resolved.matchedBy,
+            route: 'idcache',
+            cache: 'hit',
+            ms: Date.now() - started
+          };
+          writeCached(key, stamp, cachedResult);
+          if (!prefetch) {
+            rememberLast({title: s(t.title), artist: s(t.artist), addon: cachedResult.addon, route: 'idcache', cache: 'hit', ms: cachedResult.ms});
+            addActivity('idcache', s(t.title) + ' · ' + cachedResult.addon);
+          }
+          log('served by ' + cachedResult.addon + ' from resolved id cache took=' + cachedResult.ms + 'ms');
+          return cachedResult;
+        }
+        removeResolved(key);
+      } else {
+        removeResolved(key);
+      }
     }
     if (readMiss(key, stamp)) return {error: 'not-found', cache: 'hit'};
 
@@ -891,7 +1101,11 @@
           ms: Date.now() - started
         };
         writeCached(key, stamp, result);
-        if (!prefetch) rememberLast({title: s(t.title), artist: s(t.artist), addon: result.addon, route: result.route, cache: 'miss', ms: result.ms});
+        writeResolved(key, list[i], r);
+        if (!prefetch) {
+          rememberLast({title: s(t.title), artist: s(t.artist), addon: result.addon, route: result.route, cache: 'miss', ms: result.ms});
+          addActivity('play', s(t.title) + ' · ' + result.addon + ' · ' + result.route + ' · ' + result.ms + ' ms');
+        }
         log((prefetch ? 'prefetched ' : 'served by ') + result.addon + ' route=' + result.route + ' took=' + result.ms + 'ms');
         return result;
       }
@@ -900,7 +1114,10 @@
       if (r.error === 'rate-limited') anyRate = true;
       if (r.error === 'forbidden') anyForbidden = true;
     }
-    if (!prefetch && !ahead) log('no audio: ' + failures.join(', '));
+    if (!prefetch && !ahead) {
+      log('no audio: ' + failures.join(', '));
+      addActivity('miss', s(t.title) + ' · ' + (anyRate ? 'rate-limited' : anyNetwork ? 'network' : anyForbidden ? 'forbidden' : 'not-found'));
+    }
     if (anyRate) return {error: 'rate-limited', retryAfterMs: 60000};
     if (anyNetwork) return {error: 'network'};
     if (anyForbidden) return {error: 'forbidden'};
@@ -1011,6 +1228,7 @@
       if (r.audio) warmed++;
     }
     rememberPrefetch({warmed: warmed, total: tracks.length, reason: ''});
+    addActivity('prefetch', warmed + '/' + tracks.length + ' warmed');
     log('prefetch: ' + warmed + '/' + tracks.length + ' warmed in ' + (Date.now() - started) + 'ms');
   }
 
@@ -1056,7 +1274,16 @@
   });
 
   myspoti.on('playback', function (e) {
-    if (!e || e.type !== 'start') return;
+    if (!e) return;
+    if (e.type === 'start') {
+      var source = rememberNowPlaying(e);
+      addActivity('playback', s(e.track && e.track.title) + (source ? ' · ' + source : ''));
+    } else if (e.type === 'end' || e.type === 'skip') {
+      setNowPlayingPlaying(false);
+    } else if (e.type === 'pause' || e.type === 'resume') {
+      setNowPlayingPlaying(e.type === 'resume');
+    }
+    if (e.type !== 'start') return;
     if (s(e.origin) !== 'audio-source') return;
     var provider = s(e.providerId);
     var self = s(myspoti.extension && myspoti.extension.id);
@@ -1101,9 +1328,13 @@
       addons: addons,
       enabledCount: enabled,
       lastPlay: safeGet(LAST_KEY) || null,
+      nowPlaying: safeGet(NOW_KEY) || null,
+      lastRequest: safeGet(REQUEST_KEY) || null,
+      activity: safeGet(ACTIVITY_KEY) || [],
       prefetch: safeGet(PREFETCH_KEY) || null,
       prefetchConfig: prefetchConfig(),
-      cache: cacheInfo()
+      cache: cacheInfo(),
+      storageBytes: storageBytes()
     };
   }
 
@@ -1307,6 +1538,29 @@
     return pageReply(enabled ? 'Prefetch ' + count + ' upcoming song' + (count === 1 ? '' : 's') + '.' : 'Prefetch off.', true);
   }
 
+  function saveCacheMessage(msg) {
+    var input = msg && msg.settings && typeof msg.settings === 'object' ? msg.settings : {};
+    var cur = cacheConfig();
+    var next = {
+      resolved: pickNumber(input.resolved, CACHE_OPTIONS.resolved, cur.resolved),
+      streams: pickNumber(input.streams, CACHE_OPTIONS.streams, cur.streams),
+      days: pickNumber(input.days, CACHE_OPTIONS.days, cur.days),
+      minutes: pickNumber(input.minutes, CACHE_OPTIONS.minutes, cur.minutes)
+    };
+    try { myspoti.storage.set(CACHE_CFG_KEY, next); }
+    catch (e) { return pageReply('Could not save the cache settings.', false); }
+    var cache = loadCache();
+    pruneCache(cache, next.streams);
+    saveCache(cache);
+    var resolved = loadResolved();
+    pruneResolved(resolved, next.resolved, next.days);
+    saveResolved(resolved, next.resolved);
+    addActivity('settings', 'Cache: ' + next.resolved + ' IDs / ' + next.streams + ' URLs');
+    log('cache settings: ' + JSON.stringify(next));
+    pushLive();
+    return pageReply('Cache settings saved.', true);
+  }
+
   function pageMessage(input) {
     var msg = input;
     if (typeof msg === 'string') {
@@ -1324,50 +1578,44 @@
     else if (action === 'refresh') reply = refreshAddonMessage(msg);
     else if (action === 'clear_cache') {
       clearCache();
-      reply = pageReply('Resolve cache cleared.', true);
+      reply = pageReply('Cache cleared.', true);
     } else if (action === 'live') {
       reply = {ok: true, live: liveState()};
     } else if (action === 'save_prefetch') {
       reply = savePrefetchMessage(msg);
+    } else if (action === 'save_cache') {
+      reply = saveCacheMessage(msg);
     } else reply = pageReply('Unknown action.', false);
     return reply;
   }
 
   function pageHtml() {
     var css = [
-      ':root{--bg:#0d0f13;--panel:#15181f;--line:#252a34;--line2:#333a47;--text:#e8ebf1;--muted:#8b93a2;--muted2:#727b8a;--accent:#7aa2f7;--ok:#71c99a;--danger:#e58383;--r:12px}',
+      ':root{--bg:#0e1116;--panel:#151a21;--line:#242b35;--line2:#323b48;--text:#e8edf3;--muted:#8b96a5;--muted2:#6f7a89;--accent:#8bd5a5;--ok:#8bd5a5;--danger:#e58b8b;--r:12px}',
       '*{box-sizing:border-box}html{background:var(--bg);-webkit-text-size-adjust:100%}',
       'body{margin:0;padding:0 0 calc(340px + env(safe-area-inset-bottom,0px));background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}',
-      '.wrap{max-width:560px;margin:0 auto;padding:26px 18px 0}',
-      'header{padding-bottom:20px;border-bottom:1px solid var(--line)}',
-      'h1{margin:0;font-size:26px;font-weight:650;letter-spacing:-.025em}',
-      '.sub{margin:4px 0 0;font-size:13px;color:var(--muted)}',
-      'section{margin-top:26px}',
-      'h2{margin:0 0 12px;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}h2 span{color:var(--muted2);font-weight:400;letter-spacing:0;text-transform:none;margin-left:5px}',
-      '.add{display:flex;gap:8px}',
-      'input,select{width:100%;min-height:44px;padding:0 12px;border:1px solid var(--line2);border-radius:10px;background:#101319;color:var(--text);font:inherit;font-size:14px}',
-      'input::placeholder{color:#606978}input:focus,select:focus{outline:none;border-color:var(--accent)}',
-      '.add input{flex:1;min-width:0}',
-      'button{font:inherit}',
-      '.btn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid transparent;background:var(--accent);color:#0a0f18;font-weight:600;font-size:14px;cursor:pointer}.btn:disabled{opacity:.5}',
-      '.tbtn{background:none;border:0;padding:8px 5px;color:var(--accent);font-size:13px;font-weight:500;cursor:pointer}.tbtn.danger{color:var(--danger)}.tbtn.muted{color:var(--muted)}.tbtn:disabled{opacity:.35;cursor:default}',
-      '.notice{margin-top:12px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px;font-size:13px;color:var(--muted)}.notice.ok{color:var(--ok);border-color:rgba(113,201,154,.35)}.notice.err{color:var(--danger);border-color:rgba(229,131,131,.35)}',
-      '.addon{padding:14px 0;border-bottom:1px solid var(--line)}.addon:last-child{border-bottom:0}.addon.off{opacity:.5}',
-      '.addon-head{display:flex;align-items:flex-start;gap:10px}',
-      '.num{width:20px;flex:0 0 20px;color:var(--muted2);font-size:12px;line-height:22px}',
-      '.addon-main{flex:1;min-width:0}.addon-name{font-size:15px;font-weight:600}.addon-ver{font-size:11px;color:var(--muted2);margin-left:6px;font-weight:400}',
-      '.addon-sub{font-size:12px;color:var(--muted2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-      '.switch{position:relative;width:40px;height:24px;flex:0 0 40px;margin-top:2px}.switch input{position:absolute;opacity:0;width:0;height:0}.switch span{position:absolute;inset:0;border-radius:99px;background:#2a303b;transition:.15s}.switch span:after{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;border-radius:50%;background:#98a1af;transition:.15s}.switch input:checked+span{background:rgba(122,162,247,.35)}.switch input:checked+span:after{transform:translateX(16px);background:var(--accent)}',
-      '.status{font-size:12px;margin-top:8px;color:var(--muted2)}.status.ok{color:var(--ok)}.status.err{color:var(--danger)}',
-      '.actions{display:flex;align-items:center;gap:2px;margin-top:8px}.actions .grow{flex:1}',
+      '.wrap{max-width:560px;margin:0 auto;padding:24px 18px 0}',
+      'header{padding-bottom:18px;border-bottom:1px solid var(--line)}',
+      'h1{margin:0;font-size:26px;font-weight:600;letter-spacing:-.025em}.sub{margin:4px 0 0;font-size:13px;color:var(--muted)}',
+      'section{margin-top:24px}section+section{padding-top:22px;border-top:1px solid var(--line)}',
+      'h2{margin:0 0 10px;font-size:14px;font-weight:600;color:var(--text)}h2 span{color:var(--muted2);font-weight:400;margin-left:5px}',
+      '.add{display:flex;gap:8px}input,select{width:100%;min-height:44px;padding:0 12px;border:1px solid var(--line2);border-radius:10px;background:#10141a;color:var(--text);font:inherit;font-size:14px}input::placeholder{color:#606978}input:focus,select:focus{outline:none;border-color:var(--accent)}.add input{flex:1;min-width:0}button{font:inherit}',
+      '.btn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid transparent;background:var(--accent);color:#0d1511;font-weight:600;font-size:14px;cursor:pointer}.btn:disabled{opacity:.5}',
+      '.tbtn{background:none;border:0;padding:8px 4px;color:var(--accent);font-size:13px;font-weight:500;cursor:pointer}.tbtn.danger{color:var(--danger)}.tbtn.muted{color:var(--muted)}.tbtn:disabled{opacity:.35;cursor:default}',
+      '.notice{margin-top:12px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px;font-size:13px;color:var(--muted)}.notice.ok{color:var(--ok);border-color:rgba(139,213,165,.35)}.notice.err{color:var(--danger);border-color:rgba(229,139,139,.35)}',
+      '.addon{padding:13px 0;border-bottom:1px solid var(--line)}.addon:last-child{border-bottom:0}.addon.off{opacity:.5}',
+      '.addon-head{display:flex;align-items:flex-start;gap:10px}.num{flex:0 0 16px;color:var(--muted2);font-size:12px;padding-top:2px}.addon-main{flex:1;min-width:0}.addon-name{font-size:15px;font-weight:600}.addon-ver{font-size:11px;color:var(--muted2);margin-left:6px;font-weight:400}.addon-sub{font-size:12px;color:var(--muted2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.switch{position:relative;width:40px;height:24px;flex:0 0 40px;margin-top:2px}.switch input{position:absolute;opacity:0;width:0;height:0}.switch span{position:absolute;inset:0;border-radius:99px;background:#2a303b;transition:.15s}.switch span:after{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;border-radius:50%;background:#98a1af;transition:.15s}.switch input:checked+span{background:rgba(139,213,165,.3)}.switch input:checked+span:after{transform:translateX(16px);background:var(--accent)}',
+      '.status{font-size:12px;margin-top:7px;color:var(--muted2)}.status.ok{color:var(--ok)}.status.err{color:var(--danger)}',
+      '.actions{display:flex;align-items:center;gap:6px;margin-top:7px}.actions .grow{flex:1}',
       '.settings{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}',
       '.field{margin-top:12px}.field:first-child{margin-top:0}.field label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px}.field .help{font-size:11.5px;color:var(--muted2);margin:4px 0 0;line-height:1.4}',
       '.check{display:flex;align-items:center;gap:10px;min-height:44px}.check input{width:20px;min-height:20px;height:20px;padding:0;accent-color:var(--accent)}.check span{font-size:13.5px}',
       '.now{padding:14px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}.now-title{font-size:15px;font-weight:600}.now-sub{font-size:12.5px;color:var(--muted);margin-top:2px}.now-meta{font-size:11.5px;color:var(--muted2);margin-top:6px;min-height:16px}',
-      '.rows{margin-top:4px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--muted)}.row:last-child{border-bottom:0}.row b{font-weight:500;color:var(--text);text-align:right}.row select{width:auto;min-width:128px;min-height:38px;font-size:13px}',
-      '.note{font-size:11.5px;color:var(--muted2);line-height:1.5;margin:8px 0 0}.empty{color:var(--muted2);font-size:13px;margin:14px 0}',
-      'footer{margin-top:30px;padding:16px 0;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted2)}',
-      '.tail{height:160px}[hidden]{display:none!important}'
+      '.rows{margin-top:4px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--muted)}.row:last-child{border-bottom:0}.row b{font-weight:500;color:var(--text);text-align:right;overflow-wrap:anywhere}.row select{width:auto;min-width:128px;min-height:38px;font-size:13px}',
+      '.note{font-size:11.5px;color:var(--muted2);line-height:1.5;margin:8px 0 0}.empty{color:var(--muted2);font-size:13px;margin:12px 0}',
+      '.activity{display:flex;flex-direction:column;gap:9px}.act{display:flex;gap:9px;font-size:12.5px;color:var(--muted)}.act time{flex:0 0 66px;color:var(--muted2)}.act span{color:var(--text);overflow-wrap:anywhere}',
+      'footer{margin-top:28px;padding:16px 0;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted2)}.tail{height:160px}[hidden]{display:none!important}'
     ].join('');
     var h = [];
     h.push('<!doctype html><html><head><meta charset="utf-8">');
@@ -1381,15 +1629,31 @@
     h.push('<div id="addonList"><p class="empty">Loading addons…</p></div></section>');
 
     h.push('<section><h2>Playback</h2>');
-    h.push('<div class="now"><div class="now-title" id="nowTitle">Nothing played yet</div><div class="now-sub" id="nowSub">Play a song to see which addon served it.</div><div class="now-meta" id="nowMeta"></div></div>');
-    h.push('<div class="rows"><div class="row"><span>Resolve cache</span><b id="cacheCount">0 tracks</b></div>');
-    h.push('<div class="row"><span>Prefetch</span><b id="prefetchState">Waiting for a song</b></div>');
-    h.push('<div class="row"><span>Last cache write</span><b id="cacheLast">—</b></div></div>');
-    h.push('<button type="button" class="tbtn" id="clearCache">Clear resolve cache</button>');
-    h.push('<p class="note">The cache is local metadata: the addon\'s stream address, not audio. Audio still streams from the addon\'s CDN.</p></section>');
+    h.push('<div class="now"><div class="now-title" id="nowTitle">Nothing played yet</div><div class="now-sub" id="nowSub">Play a song to see what is happening.</div><div class="now-meta" id="nowMeta"></div></div>');
+    h.push('<div class="rows">');
+    h.push('<div class="row"><span>Last request</span><b id="lastRequest">No request from the app yet</b></div>');
+    h.push('<div class="row"><span>Last answer</span><b id="lastAnswer">—</b></div>');
+    h.push('<div class="row"><span>Prefetch</span><span><select id="prefetchCount"><option value="0">Off</option><option value="1">Next 1</option><option value="2">Next 2</option><option value="3">Next 3</option></select></span></div>');
+    h.push('<div class="row"><span>Prefetch status</span><b id="prefetchState">Waiting</b></div>');
+    h.push('<div class="row"><span>Local cache</span><b id="cacheStats">0 URLs · 0 IDs</b></div>');
+    h.push('<div class="row"><span>Last cache write</span><b id="cacheLast">—</b></div>');
+    h.push('</div>');
+    h.push('<div class="actions"><button type="button" class="tbtn" id="refresh">Refresh</button></div>');
+    h.push('<p class="note">If Last request stays empty, the app is not using Orpheon for this song. Check the Playback source order; the now-playing line also needs the playback.events permission. Prefetch uses the queue only when the app exposes it, and skips shuffled queues.</p></section>');
 
-    h.push('<section><h2>Prefetch</h2><div class="row"><span>Upcoming songs</span><select id="prefetchCount"><option value="0">Off</option><option value="1">Next 1</option><option value="2">Next 2</option><option value="3">Next 3</option></select></div>');
-    h.push('<p class="note">Uses MySpoti\'s queue when it is available. Shuffled queues are skipped; MySpoti still prefetches the immediate next song.</p></section>');
+    h.push('<section><h2>Cache</h2>');
+    h.push('<p class="note">Stored on this phone: stream addresses and resolved addon IDs. Audio is never stored here. NullBeat still keeps its own server-side cache.</p>');
+    h.push('<div class="rows">');
+    h.push('<div class="row"><span>Resolved IDs</span><select id="cacheResolved"><option value="100">100</option><option value="500">500</option><option value="1000">1 000</option><option value="2000">2 000</option></select></div>');
+    h.push('<div class="row"><span>Stream URLs</span><select id="cacheStreams"><option value="50">50</option><option value="200">200</option><option value="500">500</option></select></div>');
+    h.push('<div class="row"><span>Keep IDs</span><select id="cacheDays"><option value="1">1 day</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></div>');
+    h.push('<div class="row"><span>Keep URLs</span><select id="cacheMinutes"><option value="10">10 min</option><option value="30">30 min</option><option value="60">60 min</option><option value="120">120 min</option></select></div>');
+    h.push('</div>');
+    h.push('<div class="actions"><button type="button" class="btn" id="saveCache">Save cache settings</button><span class="grow"></span><button type="button" class="tbtn danger" id="clearCache">Clear cache</button></div>');
+    h.push('<p class="note" id="storageUse">Storage: — / 512 KB</p>');
+    h.push('<p class="note">Storage is limited by the app (512 KB); Orpheon trims the oldest entries if it fills up.</p></section>');
+
+    h.push('<section><h2>Activity</h2><div id="activity" class="activity"><p class="empty">No activity yet.</p></div></section>');
 
     h.push('<footer>v' + escapeHtml(VERSION) + ' · No Eclipse Cloud account or login</footer>');
     h.push('<div class="tail" aria-hidden="true"></div></div>');
@@ -1408,14 +1672,18 @@
       'function settingField(def,val){var box=mk("div","field");box.appendChild(mk("label",null,def.label||def.key));var control;if(def.type==="select"){control=document.createElement("select");var opts=def.options||[];for(var oi=0;oi<opts.length;oi++){var op=document.createElement("option");op.value=opts[oi].value;op.textContent=opts[oi].label||opts[oi].value;if(opts[oi].value===val)op.selected=true;control.appendChild(op);}}else if(def.type==="toggle"){var wrap=mk("label","check");control=document.createElement("input");control.type="checkbox";control.checked=val===true||val==="true";var lab=mk("span",null,control.checked?"On":"Off");control.onchange=function(){lab.textContent=this.checked?"On":"Off";};control.setAttribute("data-key",def.key);wrap.appendChild(control);wrap.appendChild(lab);box.appendChild(wrap);if(def.help)box.appendChild(mk("p","help",def.help));return box;}else{control=document.createElement("input");control.type=def.secret?"password":(def.type==="number"?"number":"text");if(def.type==="number"){if(def.min!=null)control.min=String(def.min);if(def.max!=null)control.max=String(def.max);if(def.step!=null)control.step=String(def.step);}if(def.maxLength)control.maxLength=def.maxLength;control.value=val==null?"":String(val);}control.setAttribute("data-key",def.key);box.appendChild(control);if(def.help)box.appendChild(mk("p","help",def.help));return box;}',
       'function addonCard(a){var card=mk("div","addon"+(a.enabled?"":" off"));var head=mk("div","addon-head");head.appendChild(mk("span","num",String(a.index+1)));var main=mk("div","addon-main");var name=mk("div","addon-name",a.name||"Eclipse addon");if(a.version)name.appendChild(mk("span","addon-ver","v"+a.version));main.appendChild(name);main.appendChild(mk("div","addon-sub",(a.host||"addon")+" · "+(a.resourceText||"stream")));head.appendChild(main);var sw=mk("label","switch");var cb=document.createElement("input");cb.type="checkbox";cb.checked=!!a.enabled;cb.setAttribute("data-toggle","1");cb.setAttribute("data-index",String(a.index));sw.appendChild(cb);sw.appendChild(mk("span"));head.appendChild(sw);card.appendChild(head);var h=healthText(a.lastTest);card.appendChild(mk("div","status"+(h.cls?" "+h.cls:""),h.text));var actions=mk("div","actions");actions.appendChild(actionBtn("Test","test",a.index));actions.appendChild(actionBtn(openSettings[a.index]?"Hide":"Settings","settings",a.index));actions.appendChild(mk("span","grow"));var up=actionBtn("↑","up",a.index,"muted");up.disabled=a.index===0;actions.appendChild(up);var down=actionBtn("↓","down",a.index,"muted");down.disabled=latest&&latest.addons&&a.index===latest.addons.length-1;actions.appendChild(down);actions.appendChild(actionBtn(confirmRemove[a.index]?"Tap again":"Remove","remove",a.index,"danger"));card.appendChild(actions);var panel=mk("div","settings");panel.setAttribute("data-panel",String(a.index));panel.hidden=!openSettings[a.index];var defs=a.settings||[];if(defs.length){for(var si=0;si<defs.length;si++){var def=defs[si];var val=a.values&&a.values[def.key]!=null?a.values[def.key]:def.default;panel.appendChild(settingField(def,val));}panel.appendChild(actionBtn("Save addon settings","saveSettings",a.index));panel.appendChild(actionBtn("Reload manifest","refresh",a.index,"muted"));}else{panel.appendChild(mk("p","note","This addon has no settings in its manifest."));}card.appendChild(panel);return card;}',
       'function renderAddons(s){var box=byId("addonList");if(!box)return;clear(box);var list=s.addons||[];if(!list.length){box.appendChild(mk("p","empty","No addons yet. Paste a manifest URL above to add the first one."));return;}for(var i=0;i<list.length;i++)box.appendChild(addonCard(list[i]));}',
-      'function renderLive(s){s=s||{};var lp=s.lastPlay;if(lp&&lp.title){setText("nowTitle",lp.title);setText("nowSub",(lp.artist||"")+(lp.addon?" · "+lp.addon:""));setText("nowMeta",[(lp.route||"resolve"),(lp.cache||"miss"),(lp.ms?lp.ms+" ms":""),ago(lp.at)].filter(Boolean).join(" · "));}else{setText("nowTitle","Nothing played yet");setText("nowSub","Play a song to see which addon served it.");setText("nowMeta","");}var cache=s.cache||{};setText("cacheCount",(cache.tracks||0)+" tracks");setText("cacheLast",cache.lastAt?ago(cache.lastAt):"—");var cfg=s.prefetchConfig||{enabled:true,count:2};var pf=s.prefetch;if(!cfg.enabled)setText("prefetchState","Off");else if(pf&&pf.total)setText("prefetchState",pf.warmed+"/"+pf.total+" warmed · "+ago(pf.at));else if(pf&&pf.reason==="queue hidden")setText("prefetchState","Queue hidden · "+ago(pf.at));else if(pf)setText("prefetchState","No upcoming · "+ago(pf.at));else setText("prefetchState","Waiting for a song");var sel=byId("prefetchCount");if(sel&&document.activeElement!==sel)sel.value=String(cfg.enabled?cfg.count:0);}',
-      'function renderState(s){latest=s||{};confirmRemove={};setText("addonCount",String((s.addons||[]).length));renderAddons(s);renderLive(s);}',
+      'function setSelect(id,v){var e=byId(id);if(e&&document.activeElement!==e)e.value=String(v);}',
+      'function renderActivity(list){var box=byId("activity");if(!box)return;clear(box);var items=(list||[]).slice().reverse();if(!items.length){box.appendChild(mk("p","empty","No activity yet."));return;}for(var i=0;i<items.length;i++){var it=items[i]||{};var row=mk("div","act");var t=document.createElement("time");t.textContent=ago(it.at);row.appendChild(t);row.appendChild(mk("span",null,it.text||""));box.appendChild(row);}}',
+      'function renderLive(s){s=s||{};var np=s.nowPlaying,lp=s.lastPlay;if(np&&np.title){setText("nowTitle",np.title);setText("nowSub",(np.artist||"")+(np.source?" · "+np.source:""));setText("nowMeta",np.playing?"Playing":"Last played · "+ago(np.at));}else if(lp&&lp.title){setText("nowTitle",lp.title);setText("nowSub",(lp.artist||"")+(lp.addon?" · "+lp.addon:""));setText("nowMeta",[(lp.route||"resolve"),(lp.cache||"miss"),(lp.ms?lp.ms+" ms":""),ago(lp.at)].filter(Boolean).join(" · "));}else{setText("nowTitle","Nothing played yet");setText("nowSub","No request from the app yet.");setText("nowMeta","");}var lr=s.lastRequest;setText("lastRequest",lr&&lr.title?((lr.ahead?"Ahead: ":"Play: ")+lr.title+" · "+ago(lr.at)):"No request from the app yet");setText("lastAnswer",lp&&lp.title?((lp.addon||"addon")+" · "+(lp.route||"resolve")+" · "+ago(lp.at)):"—");var cache=s.cache||{};setText("cacheStats",(cache.streams||0)+" URLs · "+(cache.resolved||0)+" IDs");setText("cacheLast",cache.lastAt?ago(cache.lastAt):"—");var bytes=Number(s.storageBytes)||0;setText("storageUse","Storage: ~"+(bytes?Math.round(bytes/1024):0)+" KB / 512 KB");var cfg=s.prefetchConfig||{enabled:true,count:2};var pf=s.prefetch;if(!cfg.enabled)setText("prefetchState","Off");else if(pf&&pf.total)setText("prefetchState",pf.warmed+"/"+pf.total+" · "+ago(pf.at));else if(pf&&pf.reason==="queue hidden")setText("prefetchState","Queue hidden · "+ago(pf.at));else if(pf)setText("prefetchState","No upcoming · "+ago(pf.at));else setText("prefetchState","Waiting");renderActivity(s.activity||[]);}',
+      'function renderState(s){latest=s||{};confirmRemove={};setText("addonCount",String((s.addons||[]).length));renderAddons(s);var c=s.cache&&s.cache.config||{};setSelect("cacheResolved",c.resolved||500);setSelect("cacheStreams",c.streams||200);setSelect("cacheDays",c.days||7);setSelect("cacheMinutes",c.minutes||30);var pc=s.prefetchConfig||{enabled:true,count:2};setSelect("prefetchCount",pc.enabled?pc.count:0);renderLive(s);}',
       'function settingValues(index){var panel=document.querySelector(".settings[data-panel=\\""+index+"\\"]");var values={};if(!panel)return values;var inputs=panel.querySelectorAll("[data-key]");for(var i=0;i<inputs.length;i++){var el=inputs[i],key=el.getAttribute("data-key");if(!key)continue;values[key]=el.type==="checkbox"?el.checked:el.value;}return values;}',
       'function closestOp(el){while(el&&el!==document){if(el.getAttribute&&el.getAttribute("data-op"))return el;el=el.parentNode;}return null;}',
       'var listBox=byId("addonList");listBox.addEventListener("click",function(e){var b=closestOp(e.target);if(!b)return;var op=b.getAttribute("data-op"),idx=Number(b.getAttribute("data-index"));if(op==="settings"){openSettings[idx]=!openSettings[idx];var panel=document.querySelector(".settings[data-panel=\\""+idx+"\\"]");if(panel)panel.hidden=!openSettings[idx];b.textContent=openSettings[idx]?"Hide":"Settings";return;}if(op==="remove"){if(!confirmRemove[idx]){confirmRemove[idx]=1;b.textContent="Tap again";return;}post({action:"remove",index:idx});return;}if(op==="saveSettings"){post({action:"save_settings",index:idx,values:settingValues(idx)});show("Saving settings…",null);return;}if(op==="refresh"){post({action:"refresh",index:idx});show("Reloading manifest…",null);return;}if(op==="test"){post({action:"test",index:idx});show("Testing addon…",null);return;}if(op==="up"||op==="down"){post({action:"move",index:idx,direction:op});return;}});',
       'listBox.addEventListener("change",function(e){var t=e.target;if(!t||!t.getAttribute)return;if(t.getAttribute("data-toggle"))post({action:"toggle",index:Number(t.getAttribute("data-index")),enabled:!!t.checked});});',
       'byId("addAddon").onclick=function(){var input=byId("addonUrl"),url=input?input.value:"";if(!url){show("Paste an addon manifest URL first.",false);return;}this.disabled=true;post({action:"add",url:url});show("Checking addon manifest…",null);};',
-      'byId("clearCache").onclick=function(){post({action:"clear_cache"});show("Clearing resolve cache…",null);};',
+      'byId("clearCache").onclick=function(){post({action:"clear_cache"});show("Clearing cache…",null);};',
+      'byId("saveCache").onclick=function(){post({action:"save_cache",settings:{resolved:Number(byId("cacheResolved").value),streams:Number(byId("cacheStreams").value),days:Number(byId("cacheDays").value),minutes:Number(byId("cacheMinutes").value)}});show("Saving cache settings…",null);};',
+      'byId("refresh").onclick=function(){post({action:"live"});};',
       'byId("prefetchCount").onchange=function(){post({action:"save_prefetch",count:Number(this.value)});show(Number(this.value)?"Saving prefetch…":"Turning prefetch off…",null);};',
       'window.addEventListener("message",function(e){var d=e.data;if(typeof d==="string"){try{d=JSON.parse(d);}catch(err){return;}}if(!d||typeof d!=="object")return;if(d.state)renderState(d.state);else if(d.live)renderLive(d.live);if(d.message)show(d.message,d.ok===true);else if(d.ok===false&&!d.message)show("Action failed.",false);if(d.state||d.message){var add=byId("addAddon");if(add)add.disabled=false;}if(d.ok===true&&d.message&&d.message.indexOf("Added ")===0){var input=byId("addonUrl");if(input)input.value="";}});',
       'setInterval(function(){post({action:"live"});},5000);',

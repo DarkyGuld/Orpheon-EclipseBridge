@@ -25,7 +25,7 @@ Orpheon only talks to the Eclipse addons you add. Audio and downloads come from 
   accepts a result when title/version, artist and duration agree.
 - **Downloads** — `download.source` uses the same addon order and returns the addon's own file.
 - **Health checks** — test each addon on the page; see HTTP status, latency and the last result.
-- **Short stream cache** — the stream address is reused until it expires; audio is never cached.
+- **Two-level local cache** — resolved addon IDs and stream URLs, with adjustable sizes and TTLs. Audio is never cached.
 - **Prefetch next 1–3** — choose Off, Next 1, Next 2 or Next 3 on the page. When a song starts, Orpheon reads the queue snapshot and warms those tracks. It needs `playback.events`; the host still prefetches the immediate next track.
 - **Readable page** — the addon list is not hidden behind MySpoti's mini player or bottom navigation.
 
@@ -61,8 +61,8 @@ https://github.com/DarkyGuld/Orpheon-EclipseBridge
 
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.4.zip` from `packages/` or the
-[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.4) and install it
+Download `dev.orpheon.eclipsebridge-1.0.5.zip` from `packages/` or the
+[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.5) and install it
 from the extension store's local zip option.
 
 ## Add an addon
@@ -98,6 +98,17 @@ The fallback is only used when the previous route has no playable audio. A succe
 cached until its `expiresInMs`/`expiresAt`, so replays and seeks do not ask the addon again.
 
 Downloads use the same order. `isrcMatched` is set only when the file was found by the song's ISRC.
+
+## Local cache
+
+Orpheon keeps two small caches in MySpoti's extension storage on the phone:
+
+- **Resolved IDs** — `spotifyUri/ISRC → addon ID` (for example NullBeat's `nb:…`). Default 500 entries, 7 days.
+- **Stream URLs** — the CDN address returned by the addon. Default 200 entries, 30 minutes.
+
+On a play Orpheon tries the stream URL first, then the resolved ID with the addon's `/stream/<id>` (which uses NullBeat's own server cache), and only then a full `/resolve`. Both sizes and TTLs are adjustable on the page. MySpoti allows 512 KB of extension storage, so Orpheon trims the oldest entries if the chosen limits fill it.
+
+This is **not an audio cache**. Audio still streams from the addon's CDN. Offline playback needs MySpoti's download feature.
 
 ## Prefetch
 
@@ -141,6 +152,12 @@ Or run `scripts/build.sh` from the repository root.
 - Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
 
 ## Changelog
+
+### 1.0.5
+
+- Two-level local cache: a resolved addon-ID cache (default 500, 7 days) and a stream-URL cache (default 200, 30 min). Adjust both on the page.
+- Live now-playing, last request, last answer and activity log on the page.
+- Flatter, simpler page.
 
 ### 1.0.4
 
