@@ -1,8 +1,8 @@
 {
   "id": "dev.orpheon.eclipsebridge",
   "name": "Orpheon Eclipse Bridge",
-  "version": "1.0.0",
-  "versionCode": 1,
+  "version": "1.0.1",
+  "versionCode": 2,
   "apiVersion": 1,
   "minAppVersion": "2.4.0",
   "author": "Orpheon",
@@ -54,5 +54,5 @@
       "Put Orpheon above Spotify in Playback and Downloads."
     ]
   },
-  "changelog": "1.0.0: First pure bridge release. Unified ordered addon list with add, test, enable/disable, reorder, remove and per-addon manifest settings. Exact Spotify URI/ISRC resolve, search fallback, downloads, health status and a page that clears MySpoti's player and bottom navigation."
+  "changelog": "1.0.1: Hardened stream expiry (zero/expired URLs are not cached), rate-limit handling and the status probe budget. 1.0.0: First pure bridge release with one ordered addon list, per-addon manifest settings, exact Spotify URI/ISRC resolution, search fallback, downloads and a page that clears MySpoti's player and bottom navigation."
 }

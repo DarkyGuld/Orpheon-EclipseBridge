@@ -52,7 +52,7 @@ The release workflow attaches `extension.zip`, so GitHub installs use the same s
 
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.0.zip` from `packages/` and install it from the extension
+Download `dev.orpheon.eclipsebridge-1.0.1.zip` from `packages/` and install it from the extension
 store's local zip option.
 
 ## Add an addon
@@ -119,6 +119,12 @@ Or run `scripts/build.sh` from the repository root.
 - Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
 
 ## Changelog
+
+### 1.0.1
+
+- Hardened stream expiry: zero or already-expired addresses are not cached.
+- Rate-limit and 401/403 answers from search are reported correctly.
+- The status probe stops after 3.5 s even with a long addon list.
 
 ### 1.0.0
 

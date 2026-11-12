@@ -1,4 +1,4 @@
-/* Orpheon Eclipse Bridge 1.0.0 for MySpoti. No external dependencies.
+/* Orpheon Eclipse Bridge 1.0.1 for MySpoti. No external dependencies.
  *
  * A pure Eclipse addon bridge: one ordered addon list, no Eclipse Cloud
  * account, login, token or subscription code. Each addon advertises its own
@@ -14,8 +14,8 @@
 (function () {
   'use strict';
 
-  var P = '[Orpheon 1.0.0] ';
-  var VERSION = '1.0.0';
+  var P = '[Orpheon 1.0.1] ';
+  var VERSION = '1.0.1';
   var ADDONS_KEY = 'addons_v1';
   var CACHE_KEY = 'cache_v1';
   var LAST_KEY = 'last_play_v1';
@@ -572,8 +572,9 @@
   function expiryOf(r) {
     var now = Date.now();
     var ms = Number(r.expiresInMs);
-    if (isFinite(ms) && ms > 0) return {expiresInMs: Math.min(MAX_TTL, Math.floor(ms)), expired: false};
+    if (isFinite(ms) && ms < 0) return {expiresInMs: 0, expired: true};
     if (isFinite(ms) && ms === 0) return {expiresInMs: 0, expired: false};
+    if (isFinite(ms) && ms > 0) return {expiresInMs: Math.min(MAX_TTL, Math.floor(ms)), expired: false};
     var at = Number(r.expiresAt);
     if (isFinite(at) && at > 0) {
       var when = at < 1e12 ? at * 1000 : at;
@@ -615,7 +616,8 @@
     if (hz >= 8000 && hz <= 768000) out.sampleRate = hz;
     var headers = safeHeaders(r);
     if (headers) out.headers = headers;
-    if (ex.expiresInMs > 0) out.expiresInMs = ex.expiresInMs;
+    if (ex.expiresInMs === 0) out.expiresInMs = 0;
+    else if (ex.expiresInMs > 0) out.expiresInMs = ex.expiresInMs;
     if (!out.bitDepth && !out.sampleRate) {
       out.source = trunc((addon.name || 'Addon') + ' · ' + (codec ? codec.toUpperCase() : 'audio'), 80);
     }
@@ -652,7 +654,11 @@
     for (var i = 0; i < attempts.length; i++) {
       if (!attempts[i]) continue;
       var r = getJson(addonEndpoint(addon, '/search', {q: attempts[i]}), 2600, 'search');
-      if (!r.ok) { last = r; continue; }
+      if (!r.ok) {
+        last = r;
+        if (r.error === 'http-429' || r.error === 'http-401' || r.error === 'http-403') return {error: r.error, status: r.status};
+        continue;
+      }
       var found = matchSearch(t, r.data);
       if (found) return {found: found};
     }
@@ -685,6 +691,7 @@
     if (!found && addonSupports(addon, 'search')) {
       var sr = searchAddon(t, addon);
       if (sr.found) found = sr.found;
+      else if (sr.error === 'http-429' || sr.error === 'http-401' || sr.error === 'http-403') last = sr;
       else if (!last) last = sr;
     }
 
@@ -757,6 +764,7 @@
   function writeCached(key, stamp, result) {
     var audio = result.audio || {};
     var raw = Number(audio.expiresInMs);
+    if (isFinite(raw) && raw === 0) return;
     if (isFinite(raw) && raw > 0 && raw <= 8000) return;
     var ttl = isFinite(raw) && raw > 0 ? Math.min(MAX_TTL, raw - 3000) : DEFAULT_TTL;
     if (ttl < 5000) return;
@@ -906,7 +914,9 @@
   myspoti.provide('status', function () {
     var list = enabledAddons();
     if (!list.length) return {live: false, detail: 'No addons enabled. Open Orpheon and add one.'};
+    var started = Date.now();
     for (var i = 0; i < list.length; i++) {
+      if (Date.now() - started > 3500) break;
       try {
         var r = myspoti.http.get(list[i].url, {headers: addonHeaders(), timeout: 1200});
         if (isOk(r)) return {live: true};
