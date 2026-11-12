@@ -19,7 +19,11 @@ jobs:
         run: |
           version="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
           name="dev.orpheon.eclipsebridge-${version}.zip"
-          zip -j "$name" manifest.json main.js README.md NOTICE.md LICENSE
+          if [ -f "packages/$name" ]; then
+            cp "packages/$name" "$name"
+          else
+            zip -j "$name" manifest.json main.js README.md LICENSE
+          fi
           cp "$name" extension.zip
           sha256sum "$name" extension.zip
           echo "PACKAGE=$name" >> "$GITHUB_ENV"
