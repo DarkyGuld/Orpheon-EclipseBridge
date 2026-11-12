@@ -61,8 +61,8 @@ https://github.com/DarkyGuld/Orpheon-EclipseBridge
 
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.6.zip` from `packages/` or the
-[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.6) and install it
+Download `dev.orpheon.eclipsebridge-1.0.7.zip` from `packages/` or the
+[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.7) and install it
 from the extension store's local zip option.
 
 ## Add an addon
@@ -152,6 +152,10 @@ Or run `scripts/build.sh` from the repository root.
 - Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
 
 ## Changelog
+
+### 1.0.7
+
+- Wait up to 14 s for a slow addon stream (inside MySpoti's 15 s hook) so a cold TorBox/NullBeat resolve can finish instead of falling back.
 
 ### 1.0.6
 

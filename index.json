@@ -4,8 +4,8 @@
     {
       "id": "dev.orpheon.eclipsebridge",
       "name": "Orpheon Eclipse Bridge",
-      "version": "1.0.6",
-      "versionCode": 7,
+      "version": "1.0.7",
+      "versionCode": 8,
       "author": "Orpheon",
       "description": "One ordered list of Eclipse music addons for MySpoti. Plays and downloads through your own addons with exact Spotify URI and ISRC resolution, per-addon settings, health tests and instant fallback.",
       "actions": [
@@ -41,9 +41,9 @@
           "why": "Report addon test results and configuration problems"
         }
       ],
-      "url": "packages/dev.orpheon.eclipsebridge-1.0.6.zip",
-      "sha256": "3f30c1191cf67e70b7472b27bb21dd377790431c47a8487ececf2eba89e10647",
-      "size": 27946,
+      "url": "packages/dev.orpheon.eclipsebridge-1.0.7.zip",
+      "sha256": "6a65a5f760bb9ad7fc83144e3d2ac36843071a0b9f16150c5674b7468ce887f3",
+      "size": 27999,
       "updated_at": "2026-11-12",
       "category": "tools",
       "tags": [
@@ -53,7 +53,7 @@
         "addons"
       ],
       "min_app_version": "2.4.0",
-      "changelog": "1.0.6: Do not start a second addon stream on timeouts or 5xx. The query stream form is used only for 404/400/405, and a 503 preparing is retried on the same URL. 1.0.5: Two-level local cache with adjustable sizes/TTLs and a live simpler page. 1.0.4: Live playback page. 1.0.3: Prefetch. 1.0.2: Removed the status probe. 1.0.1: Stream expiry fixes. 1.0.0: First release."
+      "changelog": "1.0.7: Wait up to 14 s for a slow addon stream (within MySpoti's 15 s hook) so a cold TorBox/NullBeat resolve can finish instead of falling back. 1.0.6: No second stream request on timeout/5xx. 1.0.5: Two-level cache/live page. 1.0.4: Live page. 1.0.3: Prefetch. 1.0.2: No status probe. 1.0.1: Expiry fixes. 1.0.0: First release."
     }
   ]
 }

@@ -1,4 +1,4 @@
-/* Orpheon Eclipse Bridge 1.0.6 for MySpoti. No external dependencies.
+/* Orpheon Eclipse Bridge 1.0.7 for MySpoti. No external dependencies.
  *
  * A pure Eclipse addon bridge: one ordered addon list, no Eclipse Cloud
  * account, login, token or subscription code. Each addon advertises its own
@@ -14,8 +14,8 @@
 (function () {
   'use strict';
 
-  var P = '[Orpheon 1.0.6] ';
-  var VERSION = '1.0.6';
+  var P = '[Orpheon 1.0.7] ';
+  var VERSION = '1.0.7';
   var ADDONS_KEY = 'addons_v1';
   var CACHE_KEY = 'cache_v1';
   var LAST_KEY = 'last_play_v1';
@@ -668,7 +668,7 @@
   }
 
   function streamFetch(addon, url, id, matchedBy) {
-    var r = getJson(url, 7000, 'stream');
+    var r = getJson(url, 14000, 'stream');
     if (!r.ok) return {error: r.error, status: r.status, retryAfterMs: r.retryAfterMs || 0, body: r.body || null};
     var audio = toAudio(r.data, addon);
     if (!audio) return {error: 'unsupported', status: r.status};
