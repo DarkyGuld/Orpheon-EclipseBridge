@@ -1,0 +1,130 @@
+# Orpheon Eclipse Bridge
+
+A pure **Eclipse addon bridge** for [MySpoti](https://github.com/MySpoti). It gives MySpoti one
+ordered addon list, the way Stash manages its addons, and removes everything that belongs to
+Eclipse Cloud.
+
+- **No Eclipse Cloud account**
+- **No login, token, premium or subscription checks**
+- **No Apple Music, Qobuz or Tidal Cloud routes**
+- **No primary/extra addon split**
+
+Orpheon only talks to the Eclipse addons you add. Audio and downloads come from those addons.
+
+> Not affiliated with Eclipse, MySpoti, Spotify, Tidal, Qobuz or Apple.
+
+## Features
+
+- **One addon list** — add any number of Eclipse addon manifest URLs.
+- **Test, enable/disable, reorder, remove** — the first enabled addon with audio wins.
+- **Per-addon settings from the manifest** — select, toggle, number, text and secret fields are read
+  from each addon's own `settings` declaration and sent as query parameters on every request.
+- **Exact Spotify identity first** — the bridge sends `spotifyUri` (and `isrc` when MySpoti knows it)
+  to `/resolve`, so the addon can do `Spotify → ISRC → TIDAL` instead of guessing by title.
+- **Search fallback** — addons without exact metadata are asked through `/search`; Orpheon only
+  accepts a result when title/version, artist and duration agree.
+- **Downloads** — `download.source` uses the same addon order and returns the addon's own file.
+- **Health status** — if no enabled addon is reachable, MySpoti can skip Orpheon instead of waiting.
+- **Short stream cache** — the stream address is reused until it expires; audio is never cached.
+- **Readable page** — the addon list is not hidden behind MySpoti's mini player or bottom navigation.
+
+## Install
+
+Requirements: **MySpoti 2.4.0 or newer**.
+
+### From the extension repository
+
+In MySpoti: **Settings → Extensions → Store → Install from an address**, then paste:
+
+```
+https://raw.githubusercontent.com/DarkyGuld/Orpheon-EclipseBridge/main/index.json
+```
+
+### From GitHub
+
+Paste the repository address in the same place:
+
+```
+https://github.com/DarkyGuld/Orpheon-EclipseBridge
+```
+
+The release workflow attaches `extension.zip`, so GitHub installs use the same signed package.
+
+### From a zip
+
+Download `dev.orpheon.eclipsebridge-1.0.0.zip` from `packages/` and install it from the extension
+store's local zip option.
+
+## Add an addon
+
+1. Open **Orpheon Eclipse Bridge → Open its page**.
+2. Paste an addon manifest URL, for example:
+   ```
+   https://your-addon.example/stash/manifest.json
+   ```
+   A base URL such as `https://your-addon.example/stash` also works; Orpheon appends
+   `/manifest.json`.
+3. Press **Test** to confirm the addon and its routes answer.
+4. Press **+ Add**.
+5. Open **Settings** on the addon card and set its quality or other manifest settings.
+6. Use the arrows to set the fallback order, or the switch to disable an addon temporarily.
+
+A private addon URL may contain a token. Orpheon keeps the full URL on the device, sends it only to
+that addon, and never writes it to logs. The page shows only the host.
+
+## Playback order
+
+For every song, Orpheon asks the enabled addons from top to bottom:
+
+```
+1. exact:  spotifyUri + isrc → /resolve → /stream/<id>
+2. exact:  /resolve-isrc (when the addon has the isrc resource)
+3. text:   title + artist + duration → /resolve → /stream/<id>
+4. search: title + artist → /search → strict match → /stream/<id>
+5. next addon
+```
+
+The fallback is only used when the previous route has no playable audio. A successful stream is
+cached until its `expiresInMs`/`expiresAt`, so replays and seeks do not ask the addon again.
+
+Downloads use the same order. `isrcMatched` is set only when the file was found by the song's ISRC.
+
+## Why no MySpoti update is needed
+
+MySpoti's audio hook already gives the extension the Spotify track `uri` and `id`. Orpheon builds
+`spotify:track:<id>` and sends it as `spotifyUri` itself. The same applies to downloads. You do not
+need a special MySpoti build for the exact route.
+
+## Build
+
+```bash
+# validate
+myspoti-ext check .
+
+# package
+myspoti-ext pack . packages
+
+# write packages/index.json
+myspoti-ext index packages "Orpheon Eclipse Bridge"
+```
+
+Or run `scripts/build.sh` from the repository root.
+
+## Privacy
+
+- No account, cloud session, analytics or telemetry.
+- No requests to Eclipse Cloud, Spotify, Apple, Qobuz or Tidal from this extension.
+- The only network requests are the manifest, resolve, search and stream calls to the addons you add.
+- Addon URLs, tokens and secrets stay in MySpoti's extension storage on the device.
+- Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
+
+## Changelog
+
+### 1.0.0
+
+- First pure bridge release.
+- Unified ordered addon list with add, test, enable/disable, reorder, remove.
+- Per-addon manifest settings.
+- Exact Spotify URI and ISRC resolution, plus search fallback.
+- Downloads through the same addon order.
+- Health status, stream cache and page spacing fix.

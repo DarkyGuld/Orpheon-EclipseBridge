@@ -1,0 +1,55 @@
+{
+  "name": "Orpheon Eclipse Bridge",
+  "extensions": [
+    {
+      "id": "dev.orpheon.eclipsebridge",
+      "name": "Orpheon Eclipse Bridge",
+      "version": "1.0.0",
+      "versionCode": 1,
+      "author": "Orpheon",
+      "description": "One ordered list of Eclipse music addons for MySpoti. Plays and downloads through your own addons with exact Spotify URI and ISRC resolution, per-addon settings, health tests and instant fallback.",
+      "actions": [
+        {
+          "name": "audio.source",
+          "why": "Play lossless audio through your enabled Eclipse addons"
+        },
+        {
+          "name": "download.source",
+          "why": "Download the same audio from your enabled Eclipse addons"
+        },
+        {
+          "name": "network",
+          "why": "Reach the addon manifests, resolve routes and audio streams you configure",
+          "hosts": [
+            "*"
+          ]
+        },
+        {
+          "name": "webview.page",
+          "why": "Add, test, reorder, enable and configure addons on one page"
+        },
+        {
+          "name": "storage",
+          "why": "Keep the addon list, its per-addon settings and a short stream cache"
+        },
+        {
+          "name": "notify",
+          "why": "Report addon test results and configuration problems"
+        }
+      ],
+      "url": "packages/dev.orpheon.eclipsebridge-1.0.0.zip",
+      "sha256": "bbde2729ba173ebf9b4441bad0157635d77bff448ef74bcd52fbc95edbd8297e",
+      "size": 22935,
+      "updated_at": "2026-11-12",
+      "category": "tools",
+      "tags": [
+        "audio",
+        "flac",
+        "lossless",
+        "addons"
+      ],
+      "min_app_version": "2.4.0",
+      "changelog": "1.0.0: First pure bridge release. Unified ordered addon list with add, test, enable/disable, reorder, remove and per-addon manifest settings. Exact Spotify URI/ISRC resolve, search fallback, downloads, health status and a page that clears MySpoti's player and bottom navigation."
+    }
+  ]
+}
