@@ -4,8 +4,8 @@
         {
             "id": "dev.orpheon.eclipsebridge",
             "name": "Orpheon Eclipse Bridge",
-            "version": "1.0.2",
-            "versionCode": 3,
+            "version": "1.0.3",
+            "versionCode": 4,
             "author": "Orpheon",
             "description": "One ordered list of Eclipse music addons for MySpoti. Plays and downloads through your own addons with exact Spotify URI and ISRC resolution, per-addon settings, health tests and instant fallback.",
             "actions": [
@@ -16,6 +16,10 @@
                 {
                     "name": "download.source",
                     "why": "Download the same audio from your enabled Eclipse addons"
+                },
+                {
+                    "name": "playback.events",
+                    "why": "Read the upcoming queue and warm the next two songs so they start instantly"
                 },
                 {
                     "name": "network",
@@ -37,9 +41,9 @@
                     "why": "Report addon test results and configuration problems"
                 }
             ],
-            "url": "dev.orpheon.eclipsebridge-1.0.2.zip",
-            "sha256": "35697c30e732899cc0ea1036ad183c2a6048804b6bc2f06fdb31b917be89231b",
-            "size": 23171,
+            "url": "dev.orpheon.eclipsebridge-1.0.3.zip",
+            "sha256": "3efdc9af301c9da3a7ab83d19138e4d1c1865dcd62993d325726b689e67bc9bb",
+            "size": 25303,
             "updated_at": "2026-11-12",
             "category": "tools",
             "tags": [
@@ -49,7 +53,7 @@
                 "addons"
             ],
             "min_app_version": "2.4.0",
-            "changelog": "1.0.2: Removed the automatic status probe so a slow or sleeping addon can never make MySpoti skip Orpheon before playback; health checks stay manual on the page. 1.0.1: Hardened stream expiry, rate-limit handling and status probe budget. 1.0.0: First pure bridge release with one ordered addon list, per-addon manifest settings, exact Spotify URI/ISRC resolution, search fallback, downloads and a page that clears MySpoti's player and bottom navigation."
+            "changelog": "1.0.3: Prefetch the next two queue tracks when a song starts, so their resolve and stream answers are already cached. Adds the playback.events permission. 1.0.2: Removed the automatic status probe so a slow addon cannot make MySpoti skip Orpheon. 1.0.1: Hardened stream expiry and rate-limit handling. 1.0.0: First pure bridge release."
         }
     ]
 }

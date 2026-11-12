@@ -1,4 +1,4 @@
-/* Orpheon Eclipse Bridge 1.0.2 for MySpoti. No external dependencies.
+/* Orpheon Eclipse Bridge 1.0.3 for MySpoti. No external dependencies.
  *
  * A pure Eclipse addon bridge: one ordered addon list, no Eclipse Cloud
  * account, login, token or subscription code. Each addon advertises its own
@@ -14,11 +14,12 @@
 (function () {
   'use strict';
 
-  var P = '[Orpheon 1.0.2] ';
-  var VERSION = '1.0.2';
+  var P = '[Orpheon 1.0.3] ';
+  var VERSION = '1.0.3';
   var ADDONS_KEY = 'addons_v1';
   var CACHE_KEY = 'cache_v1';
   var LAST_KEY = 'last_play_v1';
+  var PREFETCH_KEY = 'prefetch_v1';
   var MAX_ADDONS = 12;
   var MAX_CACHE = 120;
   var MISS_TTL = 90 * 1000;
@@ -28,6 +29,7 @@
 
   var deadline = 0;
   var budgetLeft = 0;
+  var queueSnapshot = null;
 
   function s(x) { return x == null ? '' : String(x).trim(); }
   function clean(v) { return s(v).replace(/\s+/g, ''); }
@@ -665,7 +667,7 @@
     return {error: last ? last.error : 'no-match', status: last ? last.status : 0};
   }
 
-  function tryAddon(t, addon) {
+  function tryAddon(t, addon, exactOnly) {
     var exact = !!(spotifyUriFor(t) || s(t.isrc));
     var found = null;
     var last = null;
@@ -688,7 +690,7 @@
       }
     }
 
-    if (!found && addonSupports(addon, 'search')) {
+    if (!found && !exactOnly && addonSupports(addon, 'search')) {
       var sr = searchAddon(t, addon);
       if (sr.found) found = sr.found;
       else if (sr.error === 'http-429' || sr.error === 'http-401' || sr.error === 'http-403') last = sr;
@@ -813,7 +815,7 @@
 
   function trackKey(t) {
     var uri = spotifyUriFor(t);
-    if (uri) return 'spotify:' + uri.toLowerCase();
+    if (uri) return uri.toLowerCase();
     if (s(t && t.isrc)) return 'isrc:' + s(t.isrc).toUpperCase();
     return 'meta:' + norm(t && t.title) + '|' + norm(t && t.artist) + '|' + Math.round(Number(t && t.durationMs) || 0);
   }
@@ -823,18 +825,27 @@
     try { myspoti.storage.set(LAST_KEY, data); } catch (e) {}
   }
 
+  function rememberPrefetch(data) {
+    data.at = Date.now();
+    try { myspoti.storage.set(PREFETCH_KEY, data); } catch (e) {}
+  }
+
   // ---- Resolve ----------------------------------------------------------
-  function load(t) {
+  function load(t, options) {
+    options = options || {};
+    var prefetch = options.prefetch === true;
+    var ahead = options.ahead === true;
     var started = Date.now();
-    deadline = started + 14000;
-    budgetLeft = 14000;
+    var budget = Number(options.budget) > 0 ? Number(options.budget) : (ahead ? 12000 : 14000);
+    deadline = started + budget;
+    budgetLeft = budget;
     var list = enabledAddons();
     if (!list.length) return {error: 'config'};
     var key = trackKey(t);
     var stamp = addonStamp(list);
     var cached = readCached(key, stamp);
     if (cached) {
-      rememberLast({title: s(t.title), artist: s(t.artist), addon: cached.addon, route: cached.route, cache: 'hit', ms: 0});
+      if (!prefetch) rememberLast({title: s(t.title), artist: s(t.artist), addon: cached.addon, route: cached.route, cache: 'hit', ms: 0});
       return {audio: cached.audio, cache: 'hit', addon: cached.addon, matchedBy: cached.matchedBy, route: cached.route, ms: 0};
     }
     if (readMiss(key, stamp)) return {error: 'not-found', cache: 'hit'};
@@ -842,7 +853,7 @@
     var failures = [], anyNetwork = false, anyRate = false, anyForbidden = false;
     for (var i = 0; i < list.length; i++) {
       if (budgetLeft <= 0) { anyNetwork = true; break; }
-      var r = tryAddon(t, list[i]);
+      var r = tryAddon(t, list[i], ahead || prefetch);
       if (r.audio) {
         var result = {
           audio: r.audio,
@@ -853,8 +864,8 @@
           ms: Date.now() - started
         };
         writeCached(key, stamp, result);
-        rememberLast({title: s(t.title), artist: s(t.artist), addon: result.addon, route: result.route, cache: 'miss', ms: result.ms});
-        log('served by ' + result.addon + ' route=' + result.route + ' took=' + result.ms + 'ms');
+        if (!prefetch) rememberLast({title: s(t.title), artist: s(t.artist), addon: result.addon, route: result.route, cache: 'miss', ms: result.ms});
+        log((prefetch ? 'prefetched ' : 'served by ') + result.addon + ' route=' + result.route + ' took=' + result.ms + 'ms');
         return result;
       }
       failures.push((list[i].name || 'addon') + ':' + r.error);
@@ -862,12 +873,118 @@
       if (r.error === 'rate-limited') anyRate = true;
       if (r.error === 'forbidden') anyForbidden = true;
     }
-    log('no audio: ' + failures.join(', '));
+    if (!prefetch && !ahead) log('no audio: ' + failures.join(', '));
     if (anyRate) return {error: 'rate-limited', retryAfterMs: 60000};
     if (anyNetwork) return {error: 'network'};
     if (anyForbidden) return {error: 'forbidden'};
-    rememberMiss(key, stamp);
+    if (!ahead && !prefetch) rememberMiss(key, stamp);
     return {error: 'not-found'};
+  }
+
+  // The playback event gives Orpheon a queue snapshot. MySpoti's Web Player queue
+  // can lag behind the local player, so the snapshot is used only when the current
+  // track is found in it; it is then advanced by URI as local playback moves on.
+  function queueTrack(item) {
+    if (!item || typeof item !== 'object') return null;
+    if (s(item.kind) && s(item.kind).toUpperCase() !== 'TRACK') return null;
+    var uri = s(item.uri);
+    if (!/^spotify:track:[A-Za-z0-9]+$/.test(uri)) return null;
+    var title = s(item.name);
+    if (!title) return null;
+    var t = {
+      uri: uri,
+      title: title,
+      artist: artistName(item.artists),
+      artists: item.artists,
+      durationMs: Number(item.durationMs) || 0
+    };
+    if (item.album && item.album.name) t.album = s(item.album.name);
+    return t;
+  }
+
+  function queueList(q) {
+    var items = [];
+    if (!q) return items;
+    if (q.current) items.push(q.current);
+    if (q.queued && q.queued.length) items = items.concat(q.queued);
+    if (q.nextUp && q.nextUp.length) items = items.concat(q.nextUp);
+    var out = [], seen = {};
+    for (var i = 0; i < items.length; i++) {
+      var uri = s(items[i] && items[i].uri);
+      if (!uri || seen[uri]) continue;
+      seen[uri] = 1;
+      out.push(items[i]);
+    }
+    return out;
+  }
+
+  function queueSnapshotFor(e) {
+    if (!e || e.shuffle === true) return null;
+    var currentUri = s(e.track && e.track.uri);
+    var contextUri = s(e.contextUri);
+    if (!currentUri) return null;
+    if (queueSnapshot && queueSnapshot.contextUri === contextUri &&
+        Date.now() - queueSnapshot.at < 20 * 60 * 1000) {
+      for (var j = 0; j < queueSnapshot.tracks.length; j++) {
+        if (s(queueSnapshot.tracks[j].uri) === currentUri) return queueSnapshot;
+      }
+    }
+    if (!myspoti.spotify || !myspoti.spotify.player || typeof myspoti.spotify.player.queue !== 'function') return null;
+    // The queue can belong to the previous engine context. If the player state
+    // names a different context, do not warm the wrong songs.
+    try {
+      var st = myspoti.spotify.player.state();
+      var stCtx = s(st && st.contextUri);
+      if (stCtx && contextUri && stCtx !== contextUri) { log('prefetch: context changed'); return null; }
+    } catch (stateError) {}
+    var q = null;
+    try { q = myspoti.spotify.player.queue(); }
+    catch (err) { log('prefetch: queue unavailable'); return null; }
+    var tracks = queueList(q);
+    var at = -1;
+    for (var i = 0; i < tracks.length; i++) {
+      if (s(tracks[i].uri) === currentUri) { at = i; break; }
+    }
+    if (at < 0) {
+      log('prefetch: current track not in queue');
+      queueSnapshot = null;
+      return null;
+    }
+    queueSnapshot = {contextUri: contextUri, tracks: tracks.slice(at), at: Date.now()};
+    return queueSnapshot;
+  }
+
+  function prefetchUpcoming(limit, e) {
+    var list = enabledAddons();
+    if (!list.length) return;
+    var snap = queueSnapshotFor(e);
+    if (!snap) { rememberPrefetch({warmed: 0, total: 0, reason: 'queue hidden'}); return; }
+    var currentUri = s(e.track && e.track.uri);
+    var at = -1;
+    for (var i = 0; i < snap.tracks.length; i++) {
+      if (s(snap.tracks[i].uri) === currentUri) { at = i; break; }
+    }
+    if (at < 0) { queueSnapshot = null; return; }
+    var tracks = [];
+    for (var j = at + 1; j < snap.tracks.length && tracks.length < limit; j++) {
+      var t = queueTrack(snap.tracks[j]);
+      if (t) tracks.push(t);
+    }
+    if (!tracks.length) { log('prefetch: no upcoming tracks'); rememberPrefetch({warmed: 0, total: 0, reason: 'no upcoming'}); return; }
+    var started = Date.now();
+    var end = started + 2000;
+    var stamp = addonStamp(list);
+    var warmed = 0;
+    for (var k = 0; k < tracks.length; k++) {
+      var left = end - Date.now();
+      if (left < 900) break;
+      var key = trackKey(tracks[k]);
+      if (readCached(key, stamp) || readMiss(key, stamp)) continue;
+      var r = load(tracks[k], {prefetch: true, budget: left});
+      if (r.audio) warmed++;
+    }
+    rememberPrefetch({warmed: warmed, total: tracks.length, reason: ''});
+    log('prefetch: ' + warmed + '/' + tracks.length + ' warmed in ' + (Date.now() - started) + 'ms');
   }
 
   function failureOutcome(r) {
@@ -885,7 +1002,7 @@
 
   // ---- Hooks ------------------------------------------------------------
   myspoti.provide('audio-source', function (t) {
-    var r = load(t || {});
+    var r = load(t || {}, {ahead: !!(t && t.ahead)});
     if (r.audio) return r.audio;
     log('result: ' + (r.error || 'no-audio'));
     return failureOutcome(r);
@@ -909,6 +1026,16 @@
     if (r.audio.bitDepth) file.bitDepth = r.audio.bitDepth;
     if (r.audio.sampleRate) file.sampleRate = r.audio.sampleRate;
     return [file];
+  });
+
+  myspoti.on('playback', function (e) {
+    if (!e || e.type !== 'start') return;
+    if (s(e.origin) !== 'audio-source') return;
+    var provider = s(e.providerId);
+    var self = s(myspoti.extension && myspoti.extension.id);
+    if (provider && self && provider !== self) return;
+    try { prefetchUpcoming(2, e); }
+    catch (err) { log('prefetch: failed'); }
   });
 
   // ---- Page -------------------------------------------------------------
@@ -945,6 +1072,7 @@
       addons: addons,
       enabledCount: enabled,
       lastPlay: safeGet(LAST_KEY) || null,
+      prefetch: safeGet(PREFETCH_KEY) || null,
       cache: cacheInfo()
     };
   }
@@ -1206,9 +1334,10 @@
     h.push('<section class="card"><div class="sec-head"><span class="sec-num">02</span><h2 class="sec-title">Playback</h2><span class="tag" id="cacheTag">Cache</span></div>');
     h.push('<div class="last" id="lastPlay"><div class="last-title">No track played yet</div><div class="last-sub">The last successful addon answer appears here.</div></div>');
     h.push('<div class="fact"><span>Stream cache</span><b id="cacheCount">0 tracks</b></div>');
+    h.push('<div class="fact"><span>Prefetch</span><b id="prefetchState">—</b></div>');
     h.push('<div class="fact"><span>Last cached</span><b id="cacheLast">—</b></div>');
     h.push('<button type="button" class="btn btn-ghost block" id="clearCache" style="margin-top:14px">Clear stream cache</button>');
-    h.push('<p class="sec-note">Orpheon caches only the stream address, never audio. Downloads use the same addon order as playback.</p></section>');
+    h.push('<p class="sec-note">Orpheon caches only the stream address, never audio. Prefetch warms the next two when MySpoti exposes the queue; the host still prefetches the immediate next track. Downloads use the same addon order as playback.</p></section>');
 
     h.push('<details class="adv"><summary><span class="sec-num">03</span><h2 class="sec-title">Diagnostics</h2><span class="tag">Optional</span><span class="chev">⌄</span></summary><div class="adv-body">');
     h.push('<div class="fact"><span>Version</span><b id="pageVersion">v' + escapeHtml(VERSION) + '</b></div>');
@@ -1238,7 +1367,7 @@
       'var actions=mk("div","addon-actions");var test=mk("button","mini","Test");test.type="button";test.setAttribute("data-op","test");test.setAttribute("data-index",String(a.index));actions.appendChild(test);var settingsBtn=mk("button","mini",openSettings[a.index]?"Hide":"Settings");settingsBtn.type="button";settingsBtn.setAttribute("data-op","settings");settingsBtn.setAttribute("data-index",String(a.index));actions.appendChild(settingsBtn);var spacer=mk("span","spacer");actions.appendChild(spacer);var up=mk("button","iconbtn","↑");up.type="button";up.setAttribute("data-op","up");up.setAttribute("data-index",String(a.index));up.disabled=a.index===0;actions.appendChild(up);var down=mk("button","iconbtn","↓");down.type="button";down.setAttribute("data-op","down");down.setAttribute("data-index",String(a.index));down.disabled=latest&&latest.addons&&a.index===latest.addons.length-1;actions.appendChild(down);var del=mk("button","mini danger",confirmRemove[a.index]?"Tap again":"Remove");del.type="button";del.setAttribute("data-op","remove");del.setAttribute("data-index",String(a.index));actions.appendChild(del);card.appendChild(actions);',
       'if(a.settings&&a.settings.length){var panel=mk("div","settings");panel.setAttribute("data-panel",String(a.index));if(!openSettings[a.index])panel.hidden=true;for(var si=0;si<a.settings.length;si++){var def=a.settings[si];var box=mk("div","setting");box.appendChild(mk("label","setting-label",def.label||def.key));var val=a.values&&a.values[def.key]!=null?a.values[def.key]:def.default;var control;if(def.type==="select"){control=document.createElement("select");for(var oi=0;oi<def.options.length;oi++){var op=document.createElement("option");op.value=def.options[oi].value;op.textContent=def.options[oi].label||def.options[oi].value;if(def.options[oi].value===val)op.selected=true;control.appendChild(op);}}else if(def.type==="toggle"){var wrap=mk("label","check");control=document.createElement("input");control.type="checkbox";control.checked=val===true||val==="true";var lab=mk("span",null,val===true||val==="true"?"On":"Off");control.onchange=function(){lab.textContent=this.checked?"On":"Off";};wrap.appendChild(control);wrap.appendChild(lab);control.setAttribute("data-key",def.key);box.appendChild(wrap);if(def.help)box.appendChild(mk("p","setting-help",def.help));panel.appendChild(box);continue;}else{control=document.createElement("input");control.type=def.secret?"password":"text";if(def.type==="number"){control.type="number";if(def.min!=null)control.min=String(def.min);if(def.max!=null)control.max=String(def.max);if(def.step!=null)control.step=String(def.step);}if(def.maxLength)control.maxLength=def.maxLength;control.value=val==null?"":String(val);}control.setAttribute("data-key",def.key);box.appendChild(control);if(def.help)box.appendChild(mk("p","setting-help",def.help));panel.appendChild(box);}var save=mk("button","btn btn-secondary block","Save addon settings");save.type="button";save.setAttribute("data-op","saveSettings");save.setAttribute("data-index",String(a.index));save.style.marginTop="14px";panel.appendChild(save);var refresh=mk("button","linkbtn","Reload manifest");refresh.type="button";refresh.setAttribute("data-op","refresh");refresh.setAttribute("data-index",String(a.index));panel.appendChild(refresh);card.appendChild(panel);}else{var none=mk("div","settings");none.setAttribute("data-panel",String(a.index));none.hidden=true;none.appendChild(mk("p","setting-help","This addon has no settings in its manifest."));card.appendChild(none);}return card;}',
       'function renderAddons(s){var box=byId("addonList");if(!box)return;clear(box);var list=s.addons||[];if(!list.length){box.appendChild(mk("p","empty","No addons yet. Paste a manifest URL above to add the first one."));return;}for(var i=0;i<list.length;i++)box.appendChild(addonCard(list[i]));}',
-      'function render(s){latest=s||{};confirmRemove={};var list=s.addons||[];tag(byId("addonCount"),list.length+" saved",list.length?"ok":"warn");renderAddons(s);tag(byId("cacheTag"),(s.cache&&s.cache.tracks||0)+" cached",(s.cache&&s.cache.tracks)?"ok":"warn");byId("cacheCount").textContent=(s.cache&&s.cache.tracks||0)+" tracks";byId("cacheLast").textContent=s.cache&&s.cache.lastAt?ago(s.cache.lastAt):"—";byId("enabledCount").textContent=String(s.enabledCount||0);var order=byId("orderList");clear(order);for(var i=0;i<list.length;i++){var li=document.createElement("li");li.textContent=(i+1)+". "+(list[i].name||"Eclipse addon")+(list[i].enabled?"":" (off)");order.appendChild(li);}var lp=s.lastPlay;var box=byId("lastPlay");clear(box);if(lp&&lp.title){box.appendChild(mk("div","last-title",lp.title));box.appendChild(mk("div","last-sub",(lp.artist||"")+(lp.addon?" · "+lp.addon:"")));var meta=mk("div","last-meta");meta.appendChild(mk("span","rchip",(lp.route||"resolve")+" · "+(lp.cache||"miss")));if(lp.ms)meta.appendChild(mk("span","rchip",lp.ms+" ms"));meta.appendChild(mk("span","rchip",ago(lp.at)));box.appendChild(meta);}else{box.appendChild(mk("div","last-title","No track played yet"));box.appendChild(mk("div","last-sub","The last successful addon answer appears here."));}}',
+      'function render(s){latest=s||{};confirmRemove={};var list=s.addons||[];tag(byId("addonCount"),list.length+" saved",list.length?"ok":"warn");renderAddons(s);tag(byId("cacheTag"),(s.cache&&s.cache.tracks||0)+" cached",(s.cache&&s.cache.tracks)?"ok":"warn");var pf=s.prefetch,pe=byId("prefetchState");if(pe){if(pf&&pf.total)pe.textContent=pf.warmed+"/"+pf.total+" warmed · "+ago(pf.at);else if(pf)pe.textContent=(pf.reason==="queue hidden"?"Queue hidden":"No upcoming tracks")+" · "+ago(pf.at);else pe.textContent="Waiting for a song";}byId("cacheCount").textContent=(s.cache&&s.cache.tracks||0)+" tracks";byId("cacheLast").textContent=s.cache&&s.cache.lastAt?ago(s.cache.lastAt):"—";byId("enabledCount").textContent=String(s.enabledCount||0);var order=byId("orderList");clear(order);for(var i=0;i<list.length;i++){var li=document.createElement("li");li.textContent=(i+1)+". "+(list[i].name||"Eclipse addon")+(list[i].enabled?"":" (off)");order.appendChild(li);}var lp=s.lastPlay;var box=byId("lastPlay");clear(box);if(lp&&lp.title){box.appendChild(mk("div","last-title",lp.title));box.appendChild(mk("div","last-sub",(lp.artist||"")+(lp.addon?" · "+lp.addon:"")));var meta=mk("div","last-meta");meta.appendChild(mk("span","rchip",(lp.route||"resolve")+" · "+(lp.cache||"miss")));if(lp.ms)meta.appendChild(mk("span","rchip",lp.ms+" ms"));meta.appendChild(mk("span","rchip",ago(lp.at)));box.appendChild(meta);}else{box.appendChild(mk("div","last-title","No track played yet"));box.appendChild(mk("div","last-sub","The last successful addon answer appears here."));}}',
       'function settingValues(index){var card=document.querySelector(".addon [data-panel=\\""+index+"\\"]");var values={};if(!card)return values;var inputs=card.querySelectorAll("[data-key]");for(var i=0;i<inputs.length;i++){var el=inputs[i],key=el.getAttribute("data-key");if(!key)continue;values[key]=el.type==="checkbox"?el.checked:el.value;}return values;}',
       'function closestOp(el){while(el&&el!==document){if(el.getAttribute&&el.getAttribute("data-op"))return el;el=el.parentNode;}return null;}',
       'var listBox=byId("addonList");listBox.addEventListener("click",function(e){var b=closestOp(e.target);if(!b)return;var op=b.getAttribute("data-op"),idx=Number(b.getAttribute("data-index"));if(op==="settings"){openSettings[idx]=!openSettings[idx];var panel=document.querySelector(".addon [data-panel=\\""+idx+"\\"]");if(panel)panel.hidden=!openSettings[idx];b.textContent=openSettings[idx]?"Hide":"Settings";return;}if(op==="remove"){if(!confirmRemove[idx]){confirmRemove[idx]=1;b.textContent="Tap again";return;}post({action:"remove",index:idx});return;}if(op==="saveSettings"){post({action:"save_settings",index:idx,values:settingValues(idx)});show("Saving settings…",null);return;}if(op==="refresh"){post({action:"refresh",index:idx});show("Reloading manifest…",null);return;}if(op==="test"){post({action:"test",index:idx});show("Testing addon…",null);return;}if(op==="up"||op==="down"){post({action:"move",index:idx,direction:op});return;}});',

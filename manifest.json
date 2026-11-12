@@ -1,8 +1,8 @@
 {
   "id": "dev.orpheon.eclipsebridge",
   "name": "Orpheon Eclipse Bridge",
-  "version": "1.0.2",
-  "versionCode": 3,
+  "version": "1.0.3",
+  "versionCode": 4,
   "apiVersion": 1,
   "minAppVersion": "2.4.0",
   "author": "Orpheon",
@@ -22,6 +22,10 @@
     {
       "name": "download.source",
       "why": "Download the same audio from your enabled Eclipse addons"
+    },
+    {
+      "name": "playback.events",
+      "why": "Read the upcoming queue and warm the next two songs so they start instantly"
     },
     {
       "name": "network",
@@ -54,5 +58,5 @@
       "Put Orpheon above Spotify in Playback and Downloads."
     ]
   },
-  "changelog": "1.0.2: Removed the automatic status probe so a slow or sleeping addon can never make MySpoti skip Orpheon before playback; health checks stay manual on the page. 1.0.1: Hardened stream expiry, rate-limit handling and status probe budget. 1.0.0: First pure bridge release with one ordered addon list, per-addon manifest settings, exact Spotify URI/ISRC resolution, search fallback, downloads and a page that clears MySpoti's player and bottom navigation."
+  "changelog": "1.0.3: Prefetch the next two queue tracks when a song starts, so their resolve and stream answers are already cached. Adds the playback.events permission. 1.0.2: Removed the automatic status probe so a slow addon cannot make MySpoti skip Orpheon. 1.0.1: Hardened stream expiry and rate-limit handling. 1.0.0: First pure bridge release."
 }
