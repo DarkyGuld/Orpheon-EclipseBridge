@@ -24,7 +24,7 @@ Orpheon only talks to the Eclipse addons you add. Audio and downloads come from 
 - **Search fallback** — addons without exact metadata are asked through `/search`; Orpheon only
   accepts a result when title/version, artist and duration agree.
 - **Downloads** — `download.source` uses the same addon order and returns the addon's own file.
-- **Health status** — if no enabled addon is reachable, MySpoti can skip Orpheon instead of waiting.
+- **Health checks** — test each addon on the page; see HTTP status, latency and the last result.
 - **Short stream cache** — the stream address is reused until it expires; audio is never cached.
 - **Readable page** — the addon list is not hidden behind MySpoti's mini player or bottom navigation.
 
@@ -52,7 +52,7 @@ The release workflow attaches `extension.zip`, so GitHub installs use the same s
 
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.1.zip` from `packages/` and install it from the extension
+Download `dev.orpheon.eclipsebridge-1.0.2.zip` from `packages/` and install it from the extension
 store's local zip option.
 
 ## Add an addon
@@ -119,6 +119,10 @@ Or run `scripts/build.sh` from the repository root.
 - Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
 
 ## Changelog
+
+### 1.0.2
+
+- Removed the automatic status probe. A slow or sleeping addon can no longer make MySpoti skip Orpheon before playback; the page keeps manual health checks.
 
 ### 1.0.1
 
