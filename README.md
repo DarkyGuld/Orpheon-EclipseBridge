@@ -32,28 +32,37 @@ Orpheon only talks to the Eclipse addons you add. Audio and downloads come from 
 
 Requirements: **MySpoti 2.4.0 or newer**.
 
-### From the extension repository
+### From the extension repository (recommended)
 
-In MySpoti: **Settings → Extensions → Store → Install from an address**, then paste:
+In MySpoti: **Settings → Extensions → Store → Add a repository**, then paste:
 
 ```
 https://raw.githubusercontent.com/DarkyGuld/Orpheon-EclipseBridge/main/index.json
 ```
 
-### From GitHub
+Use **Add a repository** for this URL. The **Install from an address** field expects a package zip
+or a GitHub repository, not an `index.json`; pasting the index there gives
+`no manifest.json at the root of the package`.
 
-Paste the repository address in the same place:
+### Direct install (package)
+
+In MySpoti: **Settings → Extensions → Store → Install from an address**, then paste:
+
+```
+https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/latest/download/extension.zip
+```
+
+The GitHub repository address also works there:
 
 ```
 https://github.com/DarkyGuld/Orpheon-EclipseBridge
 ```
 
-The release workflow attaches `extension.zip`, so GitHub installs use the same signed package.
-
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.2.zip` from `packages/` and install it from the extension
-store's local zip option.
+Download `dev.orpheon.eclipsebridge-1.0.2.zip` from `packages/` or the
+[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.2) and install it
+from the extension store's local zip option.
 
 ## Add an addon
 
