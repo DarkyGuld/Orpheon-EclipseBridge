@@ -26,7 +26,7 @@ Orpheon only talks to the Eclipse addons you add. Audio and downloads come from 
 - **Downloads** — `download.source` uses the same addon order and returns the addon's own file.
 - **Health checks** — test each addon on the page; see HTTP status, latency and the last result.
 - **Short stream cache** — the stream address is reused until it expires; audio is never cached.
-- **Prefetch next 2** — when a song starts, Orpheon reads the queue snapshot and warms the next two tracks. It needs `playback.events`; the host still prefetches the immediate next track.
+- **Prefetch next 1–3** — choose Off, Next 1, Next 2 or Next 3 on the page. When a song starts, Orpheon reads the queue snapshot and warms those tracks. It needs `playback.events`; the host still prefetches the immediate next track.
 - **Readable page** — the addon list is not hidden behind MySpoti's mini player or bottom navigation.
 
 ## Install
@@ -61,8 +61,8 @@ https://github.com/DarkyGuld/Orpheon-EclipseBridge
 
 ### From a zip
 
-Download `dev.orpheon.eclipsebridge-1.0.3.zip` from `packages/` or the
-[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.3) and install it
+Download `dev.orpheon.eclipsebridge-1.0.4.zip` from `packages/` or the
+[release](https://github.com/DarkyGuld/Orpheon-EclipseBridge/releases/tag/v1.0.4) and install it
 from the extension store's local zip option.
 
 ## Add an addon
@@ -101,8 +101,8 @@ Downloads use the same order. `isrcMatched` is set only when the file was found 
 
 ## Prefetch
 
-MySpoti already asks for the immediate next song ahead of time. Orpheon adds the two after it
-when the queue is readable: on a `start` event it takes the queue snapshot, finds the current
+MySpoti already asks for the immediate next song ahead of time. Orpheon can add the next one
+to three (default two) when the queue is readable: on a `start` event it takes the queue snapshot, finds the current
 track and warms the next two resolve/stream answers. Only the stream address is cached, never
 audio.
 
@@ -141,6 +141,12 @@ Or run `scripts/build.sh` from the repository root.
 - Logs contain addon names, routes, HTTP status and timings, never full URLs or settings values.
 
 ## Changelog
+
+### 1.0.4
+
+- New simple page with live playback/cache updates and a prefetch setting (Off / 1 / 2 / 3).
+- The page labels the resolve cache clearly and explains that it stores metadata, not audio.
+- Prefetch shows `Queue hidden` when MySpoti does not expose the local queue.
 
 ### 1.0.3
 

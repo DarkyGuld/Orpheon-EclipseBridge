@@ -1,4 +1,4 @@
-/* Orpheon Eclipse Bridge 1.0.3 for MySpoti. No external dependencies.
+/* Orpheon Eclipse Bridge 1.0.4 for MySpoti. No external dependencies.
  *
  * A pure Eclipse addon bridge: one ordered addon list, no Eclipse Cloud
  * account, login, token or subscription code. Each addon advertises its own
@@ -14,12 +14,13 @@
 (function () {
   'use strict';
 
-  var P = '[Orpheon 1.0.3] ';
-  var VERSION = '1.0.3';
+  var P = '[Orpheon 1.0.4] ';
+  var VERSION = '1.0.4';
   var ADDONS_KEY = 'addons_v1';
   var CACHE_KEY = 'cache_v1';
   var LAST_KEY = 'last_play_v1';
   var PREFETCH_KEY = 'prefetch_v1';
+  var PREFETCH_CFG_KEY = 'prefetch_cfg_v1';
   var MAX_ADDONS = 12;
   var MAX_CACHE = 120;
   var MISS_TTL = 90 * 1000;
@@ -311,6 +312,15 @@
       lastTest: item.lastTest && typeof item.lastTest === 'object' ? item.lastTest : null,
       addedAt: Number(item.addedAt) || Date.now()
     };
+  }
+
+  function prefetchConfig() {
+    var v = safeGet(PREFETCH_CFG_KEY);
+    var enabled = !(v && v.enabled === false);
+    var count = v && Number(v.count);
+    if (!isFinite(count) || count < 1) count = 2;
+    if (count > 3) count = 3;
+    return {enabled: enabled, count: count};
   }
 
   function loadAddons() {
@@ -750,7 +760,7 @@
     log('cache: storage full; dropped');
     return false;
   }
-  function clearCache() { safeRemove(CACHE_KEY); }
+  function clearCache() { safeRemove(CACHE_KEY); pushLive(); }
 
   function readCached(key, stamp) {
     var cache = loadCache();
@@ -813,6 +823,21 @@
     return {tracks: count, lastAt: newest || null};
   }
 
+  function liveState() {
+    return {
+      lastPlay: safeGet(LAST_KEY) || null,
+      prefetch: safeGet(PREFETCH_KEY) || null,
+      prefetchConfig: prefetchConfig(),
+      cache: cacheInfo()
+    };
+  }
+
+  function pushLive() {
+    try {
+      if (myspoti.page && typeof myspoti.page.post === 'function') myspoti.page.post({live: liveState()});
+    } catch (e) {}
+  }
+
   function trackKey(t) {
     var uri = spotifyUriFor(t);
     if (uri) return uri.toLowerCase();
@@ -823,11 +848,13 @@
   function rememberLast(data) {
     data.at = Date.now();
     try { myspoti.storage.set(LAST_KEY, data); } catch (e) {}
+    pushLive();
   }
 
   function rememberPrefetch(data) {
     data.at = Date.now();
     try { myspoti.storage.set(PREFETCH_KEY, data); } catch (e) {}
+    pushLive();
   }
 
   // ---- Resolve ----------------------------------------------------------
@@ -1034,7 +1061,9 @@
     var provider = s(e.providerId);
     var self = s(myspoti.extension && myspoti.extension.id);
     if (provider && self && provider !== self) return;
-    try { prefetchUpcoming(2, e); }
+    var cfg = prefetchConfig();
+    if (!cfg.enabled) return;
+    try { prefetchUpcoming(cfg.count, e); }
     catch (err) { log('prefetch: failed'); }
   });
 
@@ -1073,6 +1102,7 @@
       enabledCount: enabled,
       lastPlay: safeGet(LAST_KEY) || null,
       prefetch: safeGet(PREFETCH_KEY) || null,
+      prefetchConfig: prefetchConfig(),
       cache: cacheInfo()
     };
   }
@@ -1262,6 +1292,21 @@
     return pageReply('Reloaded ' + addon.name + ' · ' + resourceText(addon) + '.', true);
   }
 
+  function savePrefetchMessage(msg) {
+    var count = Number(msg && msg.count);
+    if (!isFinite(count)) count = 2;
+    count = Math.max(0, Math.min(3, Math.round(count)));
+    var enabled = count > 0;
+    try {
+      myspoti.storage.set(PREFETCH_CFG_KEY, {enabled: enabled, count: enabled ? count : 2});
+    } catch (e) {
+      return pageReply('Could not save the prefetch setting.', false);
+    }
+    log('prefetch settings: ' + (enabled ? count : 'off'));
+    pushLive();
+    return pageReply(enabled ? 'Prefetch ' + count + ' upcoming song' + (count === 1 ? '' : 's') + '.' : 'Prefetch off.', true);
+  }
+
   function pageMessage(input) {
     var msg = input;
     if (typeof msg === 'string') {
@@ -1279,102 +1324,101 @@
     else if (action === 'refresh') reply = refreshAddonMessage(msg);
     else if (action === 'clear_cache') {
       clearCache();
-      reply = pageReply('Stream cache cleared.', true);
+      reply = pageReply('Resolve cache cleared.', true);
+    } else if (action === 'live') {
+      reply = {ok: true, live: liveState()};
+    } else if (action === 'save_prefetch') {
+      reply = savePrefetchMessage(msg);
     } else reply = pageReply('Unknown action.', false);
     return reply;
   }
 
   function pageHtml() {
     var css = [
-      ':root{--bg:#080a10;--surface:#11151f;--surface2:#161c29;--inset:#0b0e15;--line:#232b3b;--line2:#303b51;--text:#eef2fb;--muted:#9ba7bc;--muted2:#748197;--accent:#82b4ff;--accent2:#b794ff;--ok:#7fe0b0;--warn:#ffd479;--danger:#ff929e;--r:18px}',
+      ':root{--bg:#0d0f13;--panel:#15181f;--line:#252a34;--line2:#333a47;--text:#e8ebf1;--muted:#8b93a2;--muted2:#727b8a;--accent:#7aa2f7;--ok:#71c99a;--danger:#e58383;--r:12px}',
       '*{box-sizing:border-box}html{background:var(--bg);-webkit-text-size-adjust:100%}',
-      'body{margin:0;padding:0 0 calc(390px + env(safe-area-inset-bottom,0px));min-height:100dvh;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5;color:var(--text);background:radial-gradient(120% 55% at 50% -8%,rgba(99,132,255,.18),transparent 62%),radial-gradient(90% 45% at 105% 12%,rgba(183,148,255,.09),transparent 60%),var(--bg)}',
-      '.shell{position:relative;max-width:440px;margin:0 auto;padding:0 20px}',
-      '.hero{padding:30px 2px 22px}.eyebrow{display:flex;align-items:center;gap:8px;font-size:10.5px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}.eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(130,180,255,.16)}',
-      'h1{margin:10px 0 8px;font-size:31px;line-height:1.03;letter-spacing:-.035em;font-weight:700;background:linear-gradient(180deg,#fff,#b9c8e8);-webkit-background-clip:text;background-clip:text;color:transparent}h1 span{display:block;font-size:19px;letter-spacing:-.02em;color:#a9b8d6;-webkit-text-fill-color:#a9b8d6}',
-      '.lede{margin:0;max-width:35ch;font-size:14.5px;color:var(--muted);line-height:1.55}.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}.chip{font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.05em;text-transform:uppercase;color:#b9c6dc;border:1px solid var(--line);background:rgba(17,21,31,.75);padding:7px 9px;border-radius:8px}',
-      '.card{position:relative;margin-top:18px;padding:18px;border:1px solid var(--line);border-radius:var(--r);background:linear-gradient(180deg,#151a25 0%,#10141d 100%);box-shadow:0 28px 60px -44px rgba(0,0,0,.95)}',
-      '.sec-head{display:flex;align-items:center;gap:10px}.sec-num{font:700 10.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.06em;color:var(--accent);padding:6px 7px;border-radius:8px;border:1px solid rgba(130,180,255,.25);background:rgba(130,180,255,.07)}.sec-title{margin:0;font-size:16px;font-weight:650;letter-spacing:-.01em}',
-      '.tag{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:9.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);padding:5px 8px;border-radius:999px;white-space:nowrap}.tag.ok{color:var(--ok);border-color:rgba(127,224,176,.3);background:rgba(127,224,176,.07)}.tag.warn{color:var(--warn);border-color:rgba(255,212,121,.28);background:rgba(255,212,121,.07)}',
-      '.sec-note{margin:8px 0 0;font-size:13px;color:var(--muted);line-height:1.5}.helper{margin:7px 0 0;font-size:12px;color:var(--muted2);line-height:1.45}',
-      '.addrow{display:flex;gap:8px;margin-top:16px}.addrow input{flex:1;min-width:0}',
-      '.btn{appearance:none;font-family:inherit;font-size:14.5px;font-weight:650;letter-spacing:.01em;min-height:48px;padding:0 18px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid transparent;cursor:pointer}.btn:active{transform:translateY(1px)}.btn-primary{background:linear-gradient(180deg,#6da2ff,#3d70e8);color:#fff;box-shadow:0 10px 24px -12px rgba(61,112,232,.9)}.btn-secondary{background:#202634;border-color:#344055;color:#e7ecf5}.btn-ghost{background:transparent;border-color:#2c3547;color:#c8d1df}.btn.block{width:100%}.btn[disabled]{opacity:.55}',
-      'input,select{width:100%;min-height:48px;padding:0 14px;border-radius:12px;border:1px solid #2c3547;background:var(--inset);color:var(--text);font-family:inherit;font-size:15px}input::placeholder{color:#5f6b7e}input:focus,select:focus{outline:none;border-color:#4d84e0;box-shadow:0 0 0 3px rgba(77,132,224,.18)}select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#8b98ad 50%),linear-gradient(135deg,#8b98ad 50%,transparent 50%);background-position:calc(100% - 18px) 21px,calc(100% - 13px) 21px;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:34px}',
-      '.notice{margin-top:14px;padding:12px 14px;border-radius:13px;border:1px solid rgba(255,212,121,.26);background:rgba(255,212,121,.07);font-size:13px;line-height:1.45;color:#f2e6c8}.notice.ok{border-color:rgba(127,224,176,.26);background:rgba(127,224,176,.07);color:#d9f7df}.notice.err{border-color:rgba(255,146,158,.28);background:rgba(255,146,158,.07);color:#ffdada}',
-      '.list{margin-top:12px}.empty{color:var(--muted2);font-size:13px;margin:12px 0}',
-      '.addon{margin-top:12px;padding:13px;border-radius:15px;border:1px solid var(--line);background:linear-gradient(180deg,#181d29,#121721)}.addon.off{opacity:.62}.addon-top{display:flex;align-items:flex-start;gap:10px}.ord{flex:0 0 27px;width:27px;height:27px;border-radius:9px;display:grid;place-items:center;margin-top:1px;font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#b3c0d8;border:1px solid #303b50;background:#171c27}.addon-main{min-width:0;flex:1}.addon-name{font-size:14.5px;font-weight:650;line-height:1.3}.addon-ver{font-size:10.5px;color:var(--muted2);margin-left:5px;font-weight:600}.addon-sub{font-size:11.5px;color:var(--muted2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-      '.switch{position:relative;flex:0 0 46px;width:46px;height:28px;margin-top:2px}.switch input{position:absolute;opacity:0;width:0;height:0}.switch span{position:absolute;inset:0;border-radius:999px;background:#2a3242;border:1px solid #3a465b;transition:.18s}.switch span:after{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;border-radius:50%;background:#8c99ad;transition:.18s}.switch input:checked + span{background:rgba(130,180,255,.28);border-color:rgba(130,180,255,.55)}.switch input:checked + span:after{transform:translateX(18px);background:#cfe0ff}',
-      '.chipsrow{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}.rchip{font:600 9.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.04em;text-transform:uppercase;color:#a9b8d0;border:1px solid #2c3547;background:#141923;padding:5px 6px;border-radius:6px}',
-      '.health{margin-top:10px;font-size:11.5px;color:var(--muted2);line-height:1.4}.health.ok{color:#9ee8c2}.health.err{color:#ffb3ba}',
-      '.addon-actions{display:flex;align-items:center;gap:6px;margin-top:11px;padding-top:11px;border-top:1px solid #212836}.addon-actions .spacer{flex:1}.mini{appearance:none;font-family:inherit;cursor:pointer;min-height:42px;padding:0 13px;border-radius:10px;font-size:12.5px;font-weight:600;color:#dfe6f2;border:1px solid #333d50;background:#1e2431}.mini.danger{color:var(--danger);border-color:rgba(255,146,158,.24);background:rgba(255,146,158,.05)}.iconbtn{appearance:none;cursor:pointer;width:42px;height:42px;border-radius:10px;display:grid;place-items:center;border:1px solid #333d50;background:#1e2431;color:#dfe6f2;font-size:16px}.iconbtn[disabled]{opacity:.35}',
-      '.settings{margin-top:12px;padding-top:12px;border-top:1px solid #212836}.setting{margin-top:12px}.setting:first-child{margin-top:0}.setting-label{display:block;margin-bottom:6px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.setting-help{margin:6px 0 0;font-size:11.5px;color:var(--muted2);line-height:1.4}.check{display:flex;align-items:center;gap:10px;min-height:48px;padding:0 12px;border:1px solid #2c3547;border-radius:12px;background:var(--inset)}.check input{width:20px;min-height:20px;height:20px;padding:0;accent-color:#6da2ff}.check span{font-size:13.5px;color:#dfe6f2}',
-      '.last{margin-top:12px;padding:13px;border-radius:13px;border:1px solid #252d3d;background:#0f131b}.last-title{font-size:14px;font-weight:650;line-height:1.35}.last-sub{margin-top:3px;font-size:12px;color:var(--muted2)}.last-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.fact{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1f2634;font-size:13px;color:var(--muted)}.fact:last-child{border-bottom:0}.fact b{color:#dfe6f2;font-weight:600}',
-      '.linkbtn{appearance:none;font-family:inherit;background:none;border:0;padding:0;min-height:42px;display:inline-flex;align-items:center;font-size:12.5px;font-weight:650;color:var(--accent);cursor:pointer}',
-      'details.adv{margin-top:18px;border:1px solid var(--line);border-radius:var(--r);background:linear-gradient(180deg,rgba(21,26,37,.72),rgba(16,20,29,.72))}details.adv>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;min-height:62px;padding:0 18px;border-radius:var(--r)}details.adv>summary::-webkit-details-marker{display:none}.chev{margin-left:auto;color:var(--muted2)}details[open] .chev{transform:rotate(180deg)}.adv-body{padding:2px 18px 18px;border-top:1px solid var(--line)}',
-      'footer{padding:26px 2px 10px;color:var(--muted2);font-size:12px;line-height:1.6}.foot-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.version{font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.04em;color:#c3ccdb;border:1px solid var(--line2);background:#121722;padding:6px 8px;border-radius:7px}footer p{margin:10px 0 0}footer strong{color:#b9c4d6;font-weight:600}.tail{height:170px}'
+      'body{margin:0;padding:0 0 calc(340px + env(safe-area-inset-bottom,0px));background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}',
+      '.wrap{max-width:560px;margin:0 auto;padding:26px 18px 0}',
+      'header{padding-bottom:20px;border-bottom:1px solid var(--line)}',
+      'h1{margin:0;font-size:26px;font-weight:650;letter-spacing:-.025em}',
+      '.sub{margin:4px 0 0;font-size:13px;color:var(--muted)}',
+      'section{margin-top:26px}',
+      'h2{margin:0 0 12px;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}h2 span{color:var(--muted2);font-weight:400;letter-spacing:0;text-transform:none;margin-left:5px}',
+      '.add{display:flex;gap:8px}',
+      'input,select{width:100%;min-height:44px;padding:0 12px;border:1px solid var(--line2);border-radius:10px;background:#101319;color:var(--text);font:inherit;font-size:14px}',
+      'input::placeholder{color:#606978}input:focus,select:focus{outline:none;border-color:var(--accent)}',
+      '.add input{flex:1;min-width:0}',
+      'button{font:inherit}',
+      '.btn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid transparent;background:var(--accent);color:#0a0f18;font-weight:600;font-size:14px;cursor:pointer}.btn:disabled{opacity:.5}',
+      '.tbtn{background:none;border:0;padding:8px 5px;color:var(--accent);font-size:13px;font-weight:500;cursor:pointer}.tbtn.danger{color:var(--danger)}.tbtn.muted{color:var(--muted)}.tbtn:disabled{opacity:.35;cursor:default}',
+      '.notice{margin-top:12px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px;font-size:13px;color:var(--muted)}.notice.ok{color:var(--ok);border-color:rgba(113,201,154,.35)}.notice.err{color:var(--danger);border-color:rgba(229,131,131,.35)}',
+      '.addon{padding:14px 0;border-bottom:1px solid var(--line)}.addon:last-child{border-bottom:0}.addon.off{opacity:.5}',
+      '.addon-head{display:flex;align-items:flex-start;gap:10px}',
+      '.num{width:20px;flex:0 0 20px;color:var(--muted2);font-size:12px;line-height:22px}',
+      '.addon-main{flex:1;min-width:0}.addon-name{font-size:15px;font-weight:600}.addon-ver{font-size:11px;color:var(--muted2);margin-left:6px;font-weight:400}',
+      '.addon-sub{font-size:12px;color:var(--muted2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.switch{position:relative;width:40px;height:24px;flex:0 0 40px;margin-top:2px}.switch input{position:absolute;opacity:0;width:0;height:0}.switch span{position:absolute;inset:0;border-radius:99px;background:#2a303b;transition:.15s}.switch span:after{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;border-radius:50%;background:#98a1af;transition:.15s}.switch input:checked+span{background:rgba(122,162,247,.35)}.switch input:checked+span:after{transform:translateX(16px);background:var(--accent)}',
+      '.status{font-size:12px;margin-top:8px;color:var(--muted2)}.status.ok{color:var(--ok)}.status.err{color:var(--danger)}',
+      '.actions{display:flex;align-items:center;gap:2px;margin-top:8px}.actions .grow{flex:1}',
+      '.settings{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}',
+      '.field{margin-top:12px}.field:first-child{margin-top:0}.field label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px}.field .help{font-size:11.5px;color:var(--muted2);margin:4px 0 0;line-height:1.4}',
+      '.check{display:flex;align-items:center;gap:10px;min-height:44px}.check input{width:20px;min-height:20px;height:20px;padding:0;accent-color:var(--accent)}.check span{font-size:13.5px}',
+      '.now{padding:14px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}.now-title{font-size:15px;font-weight:600}.now-sub{font-size:12.5px;color:var(--muted);margin-top:2px}.now-meta{font-size:11.5px;color:var(--muted2);margin-top:6px;min-height:16px}',
+      '.rows{margin-top:4px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--muted)}.row:last-child{border-bottom:0}.row b{font-weight:500;color:var(--text);text-align:right}.row select{width:auto;min-width:128px;min-height:38px;font-size:13px}',
+      '.note{font-size:11.5px;color:var(--muted2);line-height:1.5;margin:8px 0 0}.empty{color:var(--muted2);font-size:13px;margin:14px 0}',
+      'footer{margin-top:30px;padding:16px 0;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted2)}',
+      '.tail{height:160px}[hidden]{display:none!important}'
     ].join('');
     var h = [];
     h.push('<!doctype html><html><head><meta charset="utf-8">');
     h.push('<meta name="viewport" content="width=device-width,initial-scale=1">');
-    h.push('<title>Orpheon</title>');
-    h.push('<style>' + css + '</style></head><body>');
-    h.push('<main class="shell">');
-    h.push('<header class="hero"><div class="eyebrow"><span class="dot"></span>MySpoti extension</div>');
-    h.push('<h1>Orpheon<span>Eclipse Bridge</span></h1>');
-    h.push('<p class="lede">One ordered addon list. Exact Spotify URI and ISRC first; search matching only when the addon has nothing better.</p>');
-    h.push('<div class="chips"><span class="chip">One addon list</span><span class="chip">Exact identity</span><span class="chip">Downloads</span></div></header>');
+    h.push('<title>Orpheon</title><style>' + css + '</style></head><body><div class="wrap">');
+    h.push('<header><h1>Orpheon</h1><p class="sub">Eclipse addon bridge</p></header>');
 
-    h.push('<section class="card"><div class="sec-head"><span class="sec-num">01</span><h2 class="sec-title">Addons</h2><span class="tag" id="addonCount">0</span></div>');
-    h.push('<p class="sec-note">Enabled addons are tried from top to bottom. The first one with audio wins; the next one is only asked when it has nothing.</p>');
-    h.push('<div class="addrow"><input id="addonUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Addon manifest URL" aria-label="Addon manifest URL"><button type="button" class="btn btn-primary" id="addAddon">+ Add</button></div>');
-    h.push('<p class="helper">Any HTTPS addon manifest URL. A base URL is accepted too; Orpheon appends /manifest.json.</p>');
+    h.push('<section><h2>Addons <span id="addonCount">0</span></h2>');
+    h.push('<div class="add"><input id="addonUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Addon manifest URL" aria-label="Addon manifest URL"><button type="button" class="btn" id="addAddon">Add</button></div>');
     h.push('<div id="pageStatus" class="notice" role="status" aria-live="polite" hidden></div>');
-    h.push('<div class="list" id="addonList"><p class="empty">Loading addons…</p></div></section>');
+    h.push('<div id="addonList"><p class="empty">Loading addons…</p></div></section>');
 
-    h.push('<section class="card"><div class="sec-head"><span class="sec-num">02</span><h2 class="sec-title">Playback</h2><span class="tag" id="cacheTag">Cache</span></div>');
-    h.push('<div class="last" id="lastPlay"><div class="last-title">No track played yet</div><div class="last-sub">The last successful addon answer appears here.</div></div>');
-    h.push('<div class="fact"><span>Stream cache</span><b id="cacheCount">0 tracks</b></div>');
-    h.push('<div class="fact"><span>Prefetch</span><b id="prefetchState">—</b></div>');
-    h.push('<div class="fact"><span>Last cached</span><b id="cacheLast">—</b></div>');
-    h.push('<button type="button" class="btn btn-ghost block" id="clearCache" style="margin-top:14px">Clear stream cache</button>');
-    h.push('<p class="sec-note">Orpheon caches only the stream address, never audio. Prefetch warms the next two when MySpoti exposes the queue; the host still prefetches the immediate next track. Downloads use the same addon order as playback.</p></section>');
+    h.push('<section><h2>Playback</h2>');
+    h.push('<div class="now"><div class="now-title" id="nowTitle">Nothing played yet</div><div class="now-sub" id="nowSub">Play a song to see which addon served it.</div><div class="now-meta" id="nowMeta"></div></div>');
+    h.push('<div class="rows"><div class="row"><span>Resolve cache</span><b id="cacheCount">0 tracks</b></div>');
+    h.push('<div class="row"><span>Prefetch</span><b id="prefetchState">Waiting for a song</b></div>');
+    h.push('<div class="row"><span>Last cache write</span><b id="cacheLast">—</b></div></div>');
+    h.push('<button type="button" class="tbtn" id="clearCache">Clear resolve cache</button>');
+    h.push('<p class="note">The cache is local metadata: the addon\'s stream address, not audio. Audio still streams from the addon\'s CDN.</p></section>');
 
-    h.push('<details class="adv"><summary><span class="sec-num">03</span><h2 class="sec-title">Diagnostics</h2><span class="tag">Optional</span><span class="chev">⌄</span></summary><div class="adv-body">');
-    h.push('<div class="fact"><span>Version</span><b id="pageVersion">v' + escapeHtml(VERSION) + '</b></div>');
-    h.push('<div class="fact"><span>Enabled addons</span><b id="enabledCount">0</b></div>');
-    h.push('<p class="sec-note" style="margin-top:12px">Playback order:</p>');
-    h.push('<ol class="sec-note" id="orderList" style="margin-top:6px;padding-left:20px"></ol>');
-    h.push('</div></details>');
+    h.push('<section><h2>Prefetch</h2><div class="row"><span>Upcoming songs</span><select id="prefetchCount"><option value="0">Off</option><option value="1">Next 1</option><option value="2">Next 2</option><option value="3">Next 3</option></select></div>');
+    h.push('<p class="note">Uses MySpoti\'s queue when it is available. Shuffled queues are skipped; MySpoti still prefetches the immediate next song.</p></section>');
 
-    h.push('<footer><div class="foot-row"><span class="version" id="footVersion">v' + escapeHtml(VERSION) + '</span><strong>Pure Eclipse bridge</strong></div>');
-    h.push('<p>No Eclipse Cloud account, login, token or subscription. Only the addons you add receive requests. Addon credentials stay in their own URLs.</p></footer>');
-    h.push('<div class="tail" aria-hidden="true"></div>');
-    h.push('</main>');
+    h.push('<footer>v' + escapeHtml(VERSION) + ' · No Eclipse Cloud account or login</footer>');
+    h.push('<div class="tail" aria-hidden="true"></div></div>');
 
     var js = [
-      '(function(){var latest=null,openSettings={},confirmRemove={},busy=false;',
+      '(function(){var latest=null,openSettings={},confirmRemove={};',
       'function byId(id){return document.getElementById(id);}',
       'function mk(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=String(text);return e;}',
       'function clear(node){while(node.firstChild)node.removeChild(node.firstChild);}',
+      'function setText(id,text){var e=byId(id);if(e)e.textContent=text==null?"":String(text);}',
       'function post(obj){try{MyspotiPage.postMessage(JSON.stringify(obj));}catch(e){show("Could not contact the extension.",false);}}',
       'function show(message,ok){var box=byId("pageStatus");if(!box)return;if(!message){box.hidden=true;box.textContent="";return;}box.hidden=false;box.className="notice "+(ok===true?"ok":(ok===false?"err":""));box.textContent=message;}',
-      'function tag(el,text,kind){if(!el)return;el.textContent=text;el.className="tag"+(kind?" "+kind:"");}',
       'function ago(ms){if(!ms)return "never";var d=Math.max(0,Date.now()-Number(ms));if(d<60000)return "just now";if(d<3600000)return Math.floor(d/60000)+" min ago";if(d<86400000)return Math.floor(d/3600000)+" h ago";return Math.floor(d/86400000)+" d ago";}',
-      'function healthText(t){if(!t)return {text:"Not tested yet",cls:""};if(t.ok===true)return {text:"Reachable · HTTP "+(t.status||200)+" · "+(t.ms||0)+" ms · "+ago(t.at),cls:"ok"};return {text:(t.message||"Test failed")+(t.status?" (HTTP "+t.status+")":"")+" · "+ago(t.at),cls:"err"};}',
-      'function addonCard(a){var card=mk("div","addon"+(a.enabled?"":" off"));var top=mk("div","addon-top");top.appendChild(mk("span","ord",String(a.index+1)));var main=mk("div","addon-main");var name=mk("div","addon-name",a.name||"Eclipse addon");if(a.version){var ver=mk("span","addon-ver","v"+a.version);name.appendChild(ver);}main.appendChild(name);main.appendChild(mk("div","addon-sub",a.host||"addon"));top.appendChild(main);var sw=mk("label","switch");var cb=document.createElement("input");cb.type="checkbox";cb.checked=!!a.enabled;cb.setAttribute("data-toggle","1");cb.setAttribute("data-index",String(a.index));var knob=document.createElement("span");sw.appendChild(cb);sw.appendChild(knob);top.appendChild(sw);card.appendChild(top);',
-      'var chips=mk("div","chipsrow");var list=String(a.resourceText||"stream").split(",");for(var ci=0;ci<list.length;ci++){var rv=list[ci].trim();if(rv)chips.appendChild(mk("span","rchip",rv));}card.appendChild(chips);',
-      'var health=healthText(a.lastTest);card.appendChild(mk("div","health"+(health.cls?" "+health.cls:""),health.text));',
-      'var actions=mk("div","addon-actions");var test=mk("button","mini","Test");test.type="button";test.setAttribute("data-op","test");test.setAttribute("data-index",String(a.index));actions.appendChild(test);var settingsBtn=mk("button","mini",openSettings[a.index]?"Hide":"Settings");settingsBtn.type="button";settingsBtn.setAttribute("data-op","settings");settingsBtn.setAttribute("data-index",String(a.index));actions.appendChild(settingsBtn);var spacer=mk("span","spacer");actions.appendChild(spacer);var up=mk("button","iconbtn","↑");up.type="button";up.setAttribute("data-op","up");up.setAttribute("data-index",String(a.index));up.disabled=a.index===0;actions.appendChild(up);var down=mk("button","iconbtn","↓");down.type="button";down.setAttribute("data-op","down");down.setAttribute("data-index",String(a.index));down.disabled=latest&&latest.addons&&a.index===latest.addons.length-1;actions.appendChild(down);var del=mk("button","mini danger",confirmRemove[a.index]?"Tap again":"Remove");del.type="button";del.setAttribute("data-op","remove");del.setAttribute("data-index",String(a.index));actions.appendChild(del);card.appendChild(actions);',
-      'if(a.settings&&a.settings.length){var panel=mk("div","settings");panel.setAttribute("data-panel",String(a.index));if(!openSettings[a.index])panel.hidden=true;for(var si=0;si<a.settings.length;si++){var def=a.settings[si];var box=mk("div","setting");box.appendChild(mk("label","setting-label",def.label||def.key));var val=a.values&&a.values[def.key]!=null?a.values[def.key]:def.default;var control;if(def.type==="select"){control=document.createElement("select");for(var oi=0;oi<def.options.length;oi++){var op=document.createElement("option");op.value=def.options[oi].value;op.textContent=def.options[oi].label||def.options[oi].value;if(def.options[oi].value===val)op.selected=true;control.appendChild(op);}}else if(def.type==="toggle"){var wrap=mk("label","check");control=document.createElement("input");control.type="checkbox";control.checked=val===true||val==="true";var lab=mk("span",null,val===true||val==="true"?"On":"Off");control.onchange=function(){lab.textContent=this.checked?"On":"Off";};wrap.appendChild(control);wrap.appendChild(lab);control.setAttribute("data-key",def.key);box.appendChild(wrap);if(def.help)box.appendChild(mk("p","setting-help",def.help));panel.appendChild(box);continue;}else{control=document.createElement("input");control.type=def.secret?"password":"text";if(def.type==="number"){control.type="number";if(def.min!=null)control.min=String(def.min);if(def.max!=null)control.max=String(def.max);if(def.step!=null)control.step=String(def.step);}if(def.maxLength)control.maxLength=def.maxLength;control.value=val==null?"":String(val);}control.setAttribute("data-key",def.key);box.appendChild(control);if(def.help)box.appendChild(mk("p","setting-help",def.help));panel.appendChild(box);}var save=mk("button","btn btn-secondary block","Save addon settings");save.type="button";save.setAttribute("data-op","saveSettings");save.setAttribute("data-index",String(a.index));save.style.marginTop="14px";panel.appendChild(save);var refresh=mk("button","linkbtn","Reload manifest");refresh.type="button";refresh.setAttribute("data-op","refresh");refresh.setAttribute("data-index",String(a.index));panel.appendChild(refresh);card.appendChild(panel);}else{var none=mk("div","settings");none.setAttribute("data-panel",String(a.index));none.hidden=true;none.appendChild(mk("p","setting-help","This addon has no settings in its manifest."));card.appendChild(none);}return card;}',
+      'function healthText(t){if(!t)return {text:"Not tested",cls:""};if(t.ok===true)return {text:"Reachable · HTTP "+(t.status||200)+" · "+(t.ms||0)+" ms · "+ago(t.at),cls:"ok"};return {text:(t.message||"Test failed")+(t.status?" (HTTP "+t.status+")":"")+" · "+ago(t.at),cls:"err"};}',
+      'function actionBtn(label,op,index,cls){var b=mk("button","tbtn"+(cls?" "+cls:""),label);b.type="button";b.setAttribute("data-op",op);b.setAttribute("data-index",String(index));return b;}',
+      'function settingField(def,val){var box=mk("div","field");box.appendChild(mk("label",null,def.label||def.key));var control;if(def.type==="select"){control=document.createElement("select");var opts=def.options||[];for(var oi=0;oi<opts.length;oi++){var op=document.createElement("option");op.value=opts[oi].value;op.textContent=opts[oi].label||opts[oi].value;if(opts[oi].value===val)op.selected=true;control.appendChild(op);}}else if(def.type==="toggle"){var wrap=mk("label","check");control=document.createElement("input");control.type="checkbox";control.checked=val===true||val==="true";var lab=mk("span",null,control.checked?"On":"Off");control.onchange=function(){lab.textContent=this.checked?"On":"Off";};control.setAttribute("data-key",def.key);wrap.appendChild(control);wrap.appendChild(lab);box.appendChild(wrap);if(def.help)box.appendChild(mk("p","help",def.help));return box;}else{control=document.createElement("input");control.type=def.secret?"password":(def.type==="number"?"number":"text");if(def.type==="number"){if(def.min!=null)control.min=String(def.min);if(def.max!=null)control.max=String(def.max);if(def.step!=null)control.step=String(def.step);}if(def.maxLength)control.maxLength=def.maxLength;control.value=val==null?"":String(val);}control.setAttribute("data-key",def.key);box.appendChild(control);if(def.help)box.appendChild(mk("p","help",def.help));return box;}',
+      'function addonCard(a){var card=mk("div","addon"+(a.enabled?"":" off"));var head=mk("div","addon-head");head.appendChild(mk("span","num",String(a.index+1)));var main=mk("div","addon-main");var name=mk("div","addon-name",a.name||"Eclipse addon");if(a.version)name.appendChild(mk("span","addon-ver","v"+a.version));main.appendChild(name);main.appendChild(mk("div","addon-sub",(a.host||"addon")+" · "+(a.resourceText||"stream")));head.appendChild(main);var sw=mk("label","switch");var cb=document.createElement("input");cb.type="checkbox";cb.checked=!!a.enabled;cb.setAttribute("data-toggle","1");cb.setAttribute("data-index",String(a.index));sw.appendChild(cb);sw.appendChild(mk("span"));head.appendChild(sw);card.appendChild(head);var h=healthText(a.lastTest);card.appendChild(mk("div","status"+(h.cls?" "+h.cls:""),h.text));var actions=mk("div","actions");actions.appendChild(actionBtn("Test","test",a.index));actions.appendChild(actionBtn(openSettings[a.index]?"Hide":"Settings","settings",a.index));actions.appendChild(mk("span","grow"));var up=actionBtn("↑","up",a.index,"muted");up.disabled=a.index===0;actions.appendChild(up);var down=actionBtn("↓","down",a.index,"muted");down.disabled=latest&&latest.addons&&a.index===latest.addons.length-1;actions.appendChild(down);actions.appendChild(actionBtn(confirmRemove[a.index]?"Tap again":"Remove","remove",a.index,"danger"));card.appendChild(actions);var panel=mk("div","settings");panel.setAttribute("data-panel",String(a.index));panel.hidden=!openSettings[a.index];var defs=a.settings||[];if(defs.length){for(var si=0;si<defs.length;si++){var def=defs[si];var val=a.values&&a.values[def.key]!=null?a.values[def.key]:def.default;panel.appendChild(settingField(def,val));}panel.appendChild(actionBtn("Save addon settings","saveSettings",a.index));panel.appendChild(actionBtn("Reload manifest","refresh",a.index,"muted"));}else{panel.appendChild(mk("p","note","This addon has no settings in its manifest."));}card.appendChild(panel);return card;}',
       'function renderAddons(s){var box=byId("addonList");if(!box)return;clear(box);var list=s.addons||[];if(!list.length){box.appendChild(mk("p","empty","No addons yet. Paste a manifest URL above to add the first one."));return;}for(var i=0;i<list.length;i++)box.appendChild(addonCard(list[i]));}',
-      'function render(s){latest=s||{};confirmRemove={};var list=s.addons||[];tag(byId("addonCount"),list.length+" saved",list.length?"ok":"warn");renderAddons(s);tag(byId("cacheTag"),(s.cache&&s.cache.tracks||0)+" cached",(s.cache&&s.cache.tracks)?"ok":"warn");var pf=s.prefetch,pe=byId("prefetchState");if(pe){if(pf&&pf.total)pe.textContent=pf.warmed+"/"+pf.total+" warmed · "+ago(pf.at);else if(pf)pe.textContent=(pf.reason==="queue hidden"?"Queue hidden":"No upcoming tracks")+" · "+ago(pf.at);else pe.textContent="Waiting for a song";}byId("cacheCount").textContent=(s.cache&&s.cache.tracks||0)+" tracks";byId("cacheLast").textContent=s.cache&&s.cache.lastAt?ago(s.cache.lastAt):"—";byId("enabledCount").textContent=String(s.enabledCount||0);var order=byId("orderList");clear(order);for(var i=0;i<list.length;i++){var li=document.createElement("li");li.textContent=(i+1)+". "+(list[i].name||"Eclipse addon")+(list[i].enabled?"":" (off)");order.appendChild(li);}var lp=s.lastPlay;var box=byId("lastPlay");clear(box);if(lp&&lp.title){box.appendChild(mk("div","last-title",lp.title));box.appendChild(mk("div","last-sub",(lp.artist||"")+(lp.addon?" · "+lp.addon:"")));var meta=mk("div","last-meta");meta.appendChild(mk("span","rchip",(lp.route||"resolve")+" · "+(lp.cache||"miss")));if(lp.ms)meta.appendChild(mk("span","rchip",lp.ms+" ms"));meta.appendChild(mk("span","rchip",ago(lp.at)));box.appendChild(meta);}else{box.appendChild(mk("div","last-title","No track played yet"));box.appendChild(mk("div","last-sub","The last successful addon answer appears here."));}}',
-      'function settingValues(index){var card=document.querySelector(".addon [data-panel=\\""+index+"\\"]");var values={};if(!card)return values;var inputs=card.querySelectorAll("[data-key]");for(var i=0;i<inputs.length;i++){var el=inputs[i],key=el.getAttribute("data-key");if(!key)continue;values[key]=el.type==="checkbox"?el.checked:el.value;}return values;}',
+      'function renderLive(s){s=s||{};var lp=s.lastPlay;if(lp&&lp.title){setText("nowTitle",lp.title);setText("nowSub",(lp.artist||"")+(lp.addon?" · "+lp.addon:""));setText("nowMeta",[(lp.route||"resolve"),(lp.cache||"miss"),(lp.ms?lp.ms+" ms":""),ago(lp.at)].filter(Boolean).join(" · "));}else{setText("nowTitle","Nothing played yet");setText("nowSub","Play a song to see which addon served it.");setText("nowMeta","");}var cache=s.cache||{};setText("cacheCount",(cache.tracks||0)+" tracks");setText("cacheLast",cache.lastAt?ago(cache.lastAt):"—");var cfg=s.prefetchConfig||{enabled:true,count:2};var pf=s.prefetch;if(!cfg.enabled)setText("prefetchState","Off");else if(pf&&pf.total)setText("prefetchState",pf.warmed+"/"+pf.total+" warmed · "+ago(pf.at));else if(pf&&pf.reason==="queue hidden")setText("prefetchState","Queue hidden · "+ago(pf.at));else if(pf)setText("prefetchState","No upcoming · "+ago(pf.at));else setText("prefetchState","Waiting for a song");var sel=byId("prefetchCount");if(sel&&document.activeElement!==sel)sel.value=String(cfg.enabled?cfg.count:0);}',
+      'function renderState(s){latest=s||{};confirmRemove={};setText("addonCount",String((s.addons||[]).length));renderAddons(s);renderLive(s);}',
+      'function settingValues(index){var panel=document.querySelector(".settings[data-panel=\\""+index+"\\"]");var values={};if(!panel)return values;var inputs=panel.querySelectorAll("[data-key]");for(var i=0;i<inputs.length;i++){var el=inputs[i],key=el.getAttribute("data-key");if(!key)continue;values[key]=el.type==="checkbox"?el.checked:el.value;}return values;}',
       'function closestOp(el){while(el&&el!==document){if(el.getAttribute&&el.getAttribute("data-op"))return el;el=el.parentNode;}return null;}',
-      'var listBox=byId("addonList");listBox.addEventListener("click",function(e){var b=closestOp(e.target);if(!b)return;var op=b.getAttribute("data-op"),idx=Number(b.getAttribute("data-index"));if(op==="settings"){openSettings[idx]=!openSettings[idx];var panel=document.querySelector(".addon [data-panel=\\""+idx+"\\"]");if(panel)panel.hidden=!openSettings[idx];b.textContent=openSettings[idx]?"Hide":"Settings";return;}if(op==="remove"){if(!confirmRemove[idx]){confirmRemove[idx]=1;b.textContent="Tap again";return;}post({action:"remove",index:idx});return;}if(op==="saveSettings"){post({action:"save_settings",index:idx,values:settingValues(idx)});show("Saving settings…",null);return;}if(op==="refresh"){post({action:"refresh",index:idx});show("Reloading manifest…",null);return;}if(op==="test"){post({action:"test",index:idx});show("Testing addon…",null);return;}if(op==="up"||op==="down"){post({action:"move",index:idx,direction:op});return;}});',
-      'listBox.addEventListener("change",function(e){var t=e.target;if(!t||!t.getAttribute)return;if(t.getAttribute("data-toggle")){post({action:"toggle",index:Number(t.getAttribute("data-index")),enabled:!!t.checked});}});',
+      'var listBox=byId("addonList");listBox.addEventListener("click",function(e){var b=closestOp(e.target);if(!b)return;var op=b.getAttribute("data-op"),idx=Number(b.getAttribute("data-index"));if(op==="settings"){openSettings[idx]=!openSettings[idx];var panel=document.querySelector(".settings[data-panel=\\""+idx+"\\"]");if(panel)panel.hidden=!openSettings[idx];b.textContent=openSettings[idx]?"Hide":"Settings";return;}if(op==="remove"){if(!confirmRemove[idx]){confirmRemove[idx]=1;b.textContent="Tap again";return;}post({action:"remove",index:idx});return;}if(op==="saveSettings"){post({action:"save_settings",index:idx,values:settingValues(idx)});show("Saving settings…",null);return;}if(op==="refresh"){post({action:"refresh",index:idx});show("Reloading manifest…",null);return;}if(op==="test"){post({action:"test",index:idx});show("Testing addon…",null);return;}if(op==="up"||op==="down"){post({action:"move",index:idx,direction:op});return;}});',
+      'listBox.addEventListener("change",function(e){var t=e.target;if(!t||!t.getAttribute)return;if(t.getAttribute("data-toggle"))post({action:"toggle",index:Number(t.getAttribute("data-index")),enabled:!!t.checked});});',
       'byId("addAddon").onclick=function(){var input=byId("addonUrl"),url=input?input.value:"";if(!url){show("Paste an addon manifest URL first.",false);return;}this.disabled=true;post({action:"add",url:url});show("Checking addon manifest…",null);};',
-      'byId("clearCache").onclick=function(){post({action:"clear_cache"});show("Clearing stream cache…",null);};',
-      'window.addEventListener("message",function(e){var d=e.data;if(typeof d==="string"){try{d=JSON.parse(d);}catch(err){return;}}if(!d||typeof d!=="object")return;if(d.state)render(d.state);if(d.message)show(d.message,d.ok===true);else if(d.ok===false&&!d.message)show("Action failed.",false);var add=byId("addAddon");if(add)add.disabled=false;if(d.ok===true&&d.message&&d.message.indexOf("Added " )===0){var input=byId("addonUrl");if(input)input.value="";}});',
+      'byId("clearCache").onclick=function(){post({action:"clear_cache"});show("Clearing resolve cache…",null);};',
+      'byId("prefetchCount").onchange=function(){post({action:"save_prefetch",count:Number(this.value)});show(Number(this.value)?"Saving prefetch…":"Turning prefetch off…",null);};',
+      'window.addEventListener("message",function(e){var d=e.data;if(typeof d==="string"){try{d=JSON.parse(d);}catch(err){return;}}if(!d||typeof d!=="object")return;if(d.state)renderState(d.state);else if(d.live)renderLive(d.live);if(d.message)show(d.message,d.ok===true);else if(d.ok===false&&!d.message)show("Action failed.",false);if(d.state||d.message){var add=byId("addAddon");if(add)add.disabled=false;}if(d.ok===true&&d.message&&d.message.indexOf("Added ")===0){var input=byId("addonUrl");if(input)input.value="";}});',
+      'setInterval(function(){post({action:"live"});},5000);',
       'post({action:"state"});})();'
     ].join('');
     h.push('<script>' + js + '</script></body></html>');
